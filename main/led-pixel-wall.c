@@ -10,7 +10,7 @@
 #define LED_STRIP_GPIO      3       // GPIO for WS2811 data
 #define LED_COUNT           50      // Number of LEDs
 #define NUM_RANDOM_LEDS     10      // Number of LEDs to change per second
-#define BRIGHTNESS          127     // 50% Brightness (0-255)
+#define BRIGHTNESS          111     // Brightness (0-255)
 
 // 10 MHz clock = 0.1 µs per tick (since 1 / 10 MHz = 0.1 µs per tick).
 // This allows fine-grained control over the 0.4 µs, 0.85 µs, and 1.25 µs
@@ -47,7 +47,13 @@ static void led_task(void *arg) {
         for (int i = 0; i < NUM_RANDOM_LEDS; i++) {
             int index = rand() % LED_COUNT;
             uint8_t r, g, b;
-            get_random_color(&r, &g, &b);
+
+            if ((rand() % 9) == 0) {
+                r = g = b = 0;  // Turn off LED
+            } else {
+                get_random_color(&r, &g, &b);
+            }
+
             led_strip_set_pixel(led_strip, index, r, g, b);
         }
 
