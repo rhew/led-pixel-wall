@@ -11,6 +11,7 @@
 #define LED_COUNT           50      // Number of LEDs
 #define NUM_RANDOM_LEDS     10      // Number of LEDs to change per second
 #define BRIGHTNESS          111     // Brightness (0-255)
+#define DELAY_MS            50
 
 // 10 MHz clock = 0.1 µs per tick (since 1 / 10 MHz = 0.1 µs per tick).
 // This allows fine-grained control over the 0.4 µs, 0.85 µs, and 1.25 µs
@@ -61,7 +62,7 @@ static void led_task(void *arg) {
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
         ESP_LOGI("LED", "LED data written.");
 
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second
+        vTaskDelay(pdMS_TO_TICKS(DELAY_MS));
     }
 }
 
