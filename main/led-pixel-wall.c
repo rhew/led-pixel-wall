@@ -9,8 +9,8 @@
 
 #define LED_STRIP_GPIO      3       // GPIO for WS2811 data
 #define LED_COUNT           50      // Number of LEDs
-#define NUM_RANDOM_LEDS     10      // Number of LEDs to change per second
-#define BRIGHTNESS          111     // Brightness (0-255)
+#define MAX_BRIGHTNESS     0.5
+#define MAX_FADING_LEDS     15
 #define DELAY_MS            50
 
 // 10 MHz clock = 0.1 µs per tick (since 1 / 10 MHz = 0.1 µs per tick).
@@ -31,52 +31,89 @@ static void get_random_color(uint8_t *r, uint8_t *g, uint8_t *b) {
     *b = rand() % 256;
 }
 
+// Structure for fading LEDs
+typedef struct {
+    int index;
+    uint8_t r, g, b;
+    float brightness;
+    bool increasing;
+} FadingLED;
+
+FadingLED fading_leds[MAX_FADING_LEDS];
+bool led_state[LED_COUNT] = {false};
+
+// Initialize fading LEDs
+void init_fading_leds() {
+    for (int i = 0; i < MAX_FADING_LEDS; i++) {
+        fading_leds[i].index = -1;
+        fading_leds[i].brightness = 0;
+        fading_leds[i].increasing = true;
+    }
+    for (int i = 0; i < LED_COUNT; i++) {
+        led_state[i] = false;
+    }
+}
+
+// Update fading effect
+void update_fading_leds() {
+    for (int i = 0; i < MAX_FADING_LEDS; i++) {
+        if (fading_leds[i].index != -1) {
+            if (fading_leds[i].increasing) {
+                fading_leds[i].brightness += 0.1;
+                if (fading_leds[i].brightness >= MAX_BRIGHTNESS) {
+                    fading_leds[i].brightness = MAX_BRIGHTNESS;
+                    fading_leds[i].increasing = false;
+                }
+            } else {
+                fading_leds[i].brightness -= 0.1;
+                if (fading_leds[i].brightness <= 0) {
+                    fading_leds[i].brightness = 0;
+                    led_state[fading_leds[i].index] = false;
+                    fading_leds[i].index = -1;
+                }
+            }
+            led_strip_set_pixel(led_strip, fading_leds[i].index,
+                                fading_leds[i].r * fading_leds[i].brightness,
+                                fading_leds[i].g * fading_leds[i].brightness,
+                                fading_leds[i].b * fading_leds[i].brightness);
+        }
+    }
+}
+
+// Select a random LED to fade
+void select_fading_led() {
+    for (int i = 0; i < MAX_FADING_LEDS; i++) {
+        if (fading_leds[i].index == -1) {
+            int index;
+            do {
+                index = rand() % LED_COUNT;
+            } while (led_state[index]);
+            fading_leds[i].index = index;
+            get_random_color(&fading_leds[i].r, &fading_leds[i].g, &fading_leds[i].b);
+            fading_leds[i].brightness = 0;
+            fading_leds[i].increasing = true;
+            led_state[fading_leds[i].index] = true;
+            break;
+        }
+    }
+}
+
 /**
  * @brief Main LED update task
  */
 static void led_task(void *arg) {
     srand(time(NULL));  // Seed random number generator
 
-    // Set all LEDs to white
-    for (int i = 0; i < LED_COUNT; i++) {
-        led_strip_set_pixel(led_strip, i, BRIGHTNESS, BRIGHTNESS, BRIGHTNESS);
-    }
-    led_strip_refresh(led_strip);
+    init_fading_leds();
 
     while (1) {
-        // Select and update 10 random LEDs
-        for (int i = 0; i < NUM_RANDOM_LEDS; i++) {
-            int index = rand() % LED_COUNT;
-            uint8_t r, g, b;
-
-            if ((rand() % 9) == 0) {
-                r = g = b = 0;  // Turn off LED
-            } else {
-                get_random_color(&r, &g, &b);
-            }
-
-            led_strip_set_pixel(led_strip, index, r, g, b);
-        }
-
-        ESP_LOGI("LED", "Writing LED data...");
+        select_fading_led();
+        update_fading_leds();
         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-        ESP_LOGI("LED", "LED data written.");
-
         vTaskDelay(pdMS_TO_TICKS(DELAY_MS));
     }
-}
 
-// static void manual(void) {
-//     gpio_reset_pin(GPIO_NUM_3);
-//     gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT);
-// 
-//     while (1) {
-//         gpio_set_level(GPIO_NUM_3, 1);
-//         vTaskDelay(pdMS_TO_TICKS(500));
-//         gpio_set_level(GPIO_NUM_3, 0);
-//         vTaskDelay(pdMS_TO_TICKS(500));
-//     }
-// }
+}
 
 /**
  * @brief ESP32-S3 Main Function
