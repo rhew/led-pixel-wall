@@ -1,3 +1,11 @@
-idf_component_register(SRCS "led-pixel-wall.c"
-                    INCLUDE_DIRS "."
-                    REQUIRES bt)
+idf_component_register(
+    SRCS
+        "app.c"
+        "effects.c"
+        "effects_random_breathe.c"
+        "led_driver.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        led_strip
+)
