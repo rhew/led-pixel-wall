@@ -56,7 +56,10 @@ void led_driver_render(const rgb_f *colors, size_t count) {
 
     for (size_t i = 0; i < count; ++i) {
         const rgb_f *c = &colors[i];
-        ESP_ERROR_CHECK(led_strip_set_pixel(s_strip, i, to_u8(c->r), to_u8(c->g), to_u8(c->b)));
+        uint8_t r = to_u8(c->r);
+        uint8_t g = to_u8(c->g);
+        uint8_t b = to_u8(c->b);
+        ESP_ERROR_CHECK(led_strip_set_pixel(s_strip, i, g, r, b));
     }
 
     ESP_ERROR_CHECK(led_strip_refresh(s_strip));

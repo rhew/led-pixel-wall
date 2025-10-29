@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include "effects_random_breathe.h"
 #include "effects.h"
@@ -16,8 +17,16 @@ typedef struct {
     rgb_f color;
 } slot_t;
 
-static effects_random_breathe_config_t s_cfg;
-static slot_t *s_slots;
+struct effects_random_breathe_state {
+    const uint16_t *indices;
+    size_t led_count;
+    size_t max_active;
+    uint32_t fade_in_ms;
+    uint32_t hold_ms;
+    uint32_t fade_out_ms;
+    float max_brightness;
+    slot_t *slots;
+};
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -70,41 +79,58 @@ static rgb_f random_color(float max_brightness) {
     return hsv_to_rgb(hue, 1.0f, clamp01(max_brightness));
 }
 
-esp_err_t effects_random_breathe_init(const effects_random_breathe_config_t *config) {
-    if (!config || config->led_count == 0) {
+esp_err_t effects_random_breathe_create(effects_random_breathe_state_t **out_state,
+                                        const uint16_t *indices,
+                                        size_t led_count,
+                                        const effects_random_breathe_params_t *params) {
+    if (!out_state || !indices || !params || led_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (s_slots) {
-        free(s_slots);
-        s_slots = NULL;
-    }
-
-    s_slots = calloc(config->led_count, sizeof(slot_t));
-    if (!s_slots) {
+    effects_random_breathe_state_t *state = calloc(1, sizeof(*state));
+    if (!state) {
         return ESP_ERR_NO_MEM;
     }
 
-    s_cfg = *config;
-    if (s_cfg.max_active > s_cfg.led_count) {
-        s_cfg.max_active = s_cfg.led_count;
+    state->slots = calloc(led_count, sizeof(slot_t));
+    if (!state->slots) {
+        free(state);
+        return ESP_ERR_NO_MEM;
     }
+
+    state->indices = indices;
+    state->led_count = led_count;
+    state->max_active = params->max_active > led_count ? led_count : params->max_active;
+    state->fade_in_ms = params->fade_in_ms;
+    state->hold_ms = params->hold_ms;
+    state->fade_out_ms = params->fade_out_ms;
+    state->max_brightness = params->max_brightness;
+
+    *out_state = state;
     return ESP_OK;
 }
 
-static size_t active_slots(void) {
+void effects_random_breathe_destroy(effects_random_breathe_state_t *state) {
+    if (!state) {
+        return;
+    }
+    free(state->slots);
+    free(state);
+}
+
+static size_t active_slots(const effects_random_breathe_state_t *state) {
     size_t count = 0;
-    for (size_t i = 0; i < s_cfg.led_count; ++i) {
-        if (s_slots[i].phase != SLOT_INACTIVE) {
+    for (size_t i = 0; i < state->led_count; ++i) {
+        if (state->slots[i].phase != SLOT_INACTIVE) {
             count++;
         }
     }
     return count;
 }
 
-static void update_hold_slots(uint32_t step_ms) {
-    for (size_t i = 0; i < s_cfg.led_count; ++i) {
-        slot_t *slot = &s_slots[i];
+static void update_hold_slots(effects_random_breathe_state_t *state, uint32_t step_ms) {
+    for (size_t i = 0; i < state->led_count; ++i) {
+        slot_t *slot = &state->slots[i];
         if (slot->phase != SLOT_HOLDING) {
             continue;
         }
@@ -113,21 +139,21 @@ static void update_hold_slots(uint32_t step_ms) {
         } else {
             slot->hold_remaining_ms = 0;
             slot->phase = SLOT_FADING_OUT;
-            effects_drive_to(i, (rgb_f){0, 0, 0}, s_cfg.fade_out_ms);
+            effects_drive_to(state->indices[i], (rgb_f){0, 0, 0}, state->fade_out_ms);
         }
     }
 }
 
-static void sync_with_transitions(void) {
-    for (size_t i = 0; i < s_cfg.led_count; ++i) {
-        slot_t *slot = &s_slots[i];
-        bool active = effects_transition_active(i);
+static void sync_with_transitions(effects_random_breathe_state_t *state) {
+    for (size_t i = 0; i < state->led_count; ++i) {
+        slot_t *slot = &state->slots[i];
+        bool active = effects_transition_active(state->indices[i]);
 
         switch (slot->phase) {
         case SLOT_FADING_IN:
             if (!active) {
                 slot->phase = SLOT_HOLDING;
-                slot->hold_remaining_ms = s_cfg.hold_ms;
+                slot->hold_remaining_ms = state->hold_ms;
             }
             break;
         case SLOT_FADING_OUT:
@@ -141,37 +167,37 @@ static void sync_with_transitions(void) {
     }
 }
 
-static void spawn_new_slots(void) {
-    if (s_cfg.max_active == 0) {
+static void spawn_new_slots(effects_random_breathe_state_t *state) {
+    if (state->max_active == 0) {
         return;
     }
 
-    if (active_slots() >= s_cfg.max_active) {
+    if (active_slots(state) >= state->max_active) {
         return;
     }
 
     size_t attempts = 0;
-    size_t max_attempts = s_cfg.led_count;
+    size_t max_attempts = state->led_count;
     while (attempts < max_attempts) {
-        size_t index = (size_t)(rand() % s_cfg.led_count);
-        slot_t *slot = &s_slots[index];
+        size_t index = (size_t)(rand() % state->led_count);
+        slot_t *slot = &state->slots[index];
         if (slot->phase == SLOT_INACTIVE) {
-            slot->color = random_color(s_cfg.max_brightness);
+            slot->color = random_color(state->max_brightness);
             slot->phase = SLOT_FADING_IN;
-            slot->hold_remaining_ms = s_cfg.hold_ms;
-            effects_drive_to(index, slot->color, s_cfg.fade_in_ms);
+            slot->hold_remaining_ms = state->hold_ms;
+            effects_drive_to(state->indices[index], slot->color, state->fade_in_ms);
             break;
         }
         attempts++;
     }
 }
 
-void effects_random_breathe_tick(uint32_t step_ms) {
-    if (!s_slots || s_cfg.led_count == 0) {
+void effects_random_breathe_tick(effects_random_breathe_state_t *state, uint32_t step_ms) {
+    if (!state || state->led_count == 0) {
         return;
     }
 
-    update_hold_slots(step_ms);
-    sync_with_transitions();
-    spawn_new_slots();
+    update_hold_slots(state, step_ms);
+    sync_with_transitions(state);
+    spawn_new_slots(state);
 }

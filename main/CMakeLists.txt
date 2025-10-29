@@ -3,7 +3,12 @@ idf_component_register(
         "app.c"
         "effects.c"
         "effects_random_breathe.c"
+        "effects_cylon.c"
+        "effects_fast_blink.c"
+        "effects_static_on.c"
+        "effect_registry.c"
         "led_driver.c"
+        "segment.c"
     INCLUDE_DIRS
         "."
     REQUIRES
