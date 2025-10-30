@@ -2,8 +2,9 @@
 
 Control a wall of pixels. Tested with:
 
-  - TinyS3 ESP32-S3 microcontroller
-  - WS2811 LEDs
+- TinyS3 ESP32-S3 microcontroller
+- WS2811 LEDs
+- LED panel with a 5×10 serpentine layout starting at the bottom-left corner
 
 ---
 
