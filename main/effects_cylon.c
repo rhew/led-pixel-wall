@@ -34,6 +34,9 @@ esp_err_t effects_cylon_create(effects_cylon_state_t **out_state,
     state->direction = 1;
     state->elapsed = 0;
 
+    // Prime the first LED so the effect is visible immediately.
+    effects_drive_to(state->indices[state->current], state->color, state->fade_ms);
+
     *out_state = state;
     return ESP_OK;
 }
@@ -54,6 +57,10 @@ void effects_cylon_tick(effects_cylon_state_t *state, uint32_t step_ms) {
         return;
     }
 
+    if (state->led_count == 0) {
+        return;
+    }
+
     state->elapsed += step_ms;
     if (state->elapsed < state->dwell_ms) {
         return;
@@ -61,26 +68,24 @@ void effects_cylon_tick(effects_cylon_state_t *state, uint32_t step_ms) {
 
     state->elapsed = 0;
 
-    // Turn off current LED
-    set_led(state, state->current, (rgb_f){0, 0, 0}, state->fade_ms);
-
-    // Move position
+    size_t next = state->current;
     if (state->direction > 0) {
-        if (state->current + 1 >= state->led_count) {
+        if (state->current + 1 < state->led_count) {
+            next = state->current + 1;
+        } else if (state->led_count > 1) {
             state->direction = -1;
-            state->current = state->led_count - 2;
-        } else {
-            state->current++;
+            next = state->current - 1;
         }
     } else {
-        if (state->current == 0) {
+        if (state->current > 0) {
+            next = state->current - 1;
+        } else if (state->led_count > 1) {
             state->direction = 1;
-            state->current = 1;
-        } else {
-            state->current--;
+            next = state->current + 1;
         }
     }
 
-    // Light new LED
+    set_led(state, state->current, (rgb_f){0, 0, 0}, state->fade_ms);
+    state->current = next;
     set_led(state, state->current, state->color, state->fade_ms);
 }

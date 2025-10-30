@@ -4,13 +4,21 @@ idf_component_register(
         "effects.c"
         "effects_random_breathe.c"
         "effects_cylon.c"
+        "effects_pattern.c"
         "effects_fast_blink.c"
         "effects_static_on.c"
         "effect_registry.c"
         "led_driver.c"
+        "wifi_provisioning.c"
         "segment.c"
     INCLUDE_DIRS
         "."
     REQUIRES
         led_strip
+        esp_wifi
+        esp_event
+        esp_http_server
+        esp_netif
+        nvs_flash
+        esp_timer
 )

@@ -1,6 +1,7 @@
 #include "effect_registry.h"
 #include "effects_cylon.h"
 #include "effects_fast_blink.h"
+#include "effects_pattern.h"
 #include "effects_random_breathe.h"
 #include "effects_static_on.h"
 
@@ -94,6 +95,12 @@ static const effect_descriptor_t kDescriptors[] = {
         .create = create_cylon,
         .destroy = destroy_cylon,
         .tick = tick_cylon,
+    },
+    [EFFECT_TYPE_PATTERN] = {
+        .type = EFFECT_TYPE_PATTERN,
+        .create = effects_pattern_create,
+        .destroy = effects_pattern_destroy,
+        .tick = effects_pattern_tick,
     },
     [EFFECT_TYPE_STATIC_ON] = {
         .type = EFFECT_TYPE_STATIC_ON,

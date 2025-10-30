@@ -10,6 +10,7 @@ typedef enum {
     SEGMENT_EFFECT_RANDOM_BREATHE = EFFECT_TYPE_RANDOM_BREATHE,
     SEGMENT_EFFECT_FAST_BLINK = EFFECT_TYPE_FAST_BLINK,
     SEGMENT_EFFECT_CYLON = EFFECT_TYPE_CYLON,
+    SEGMENT_EFFECT_PATTERN = EFFECT_TYPE_PATTERN,
     SEGMENT_EFFECT_STATIC_ON = EFFECT_TYPE_STATIC_ON,
 } segment_effect_id_t;
 
@@ -24,5 +25,8 @@ typedef struct {
 esp_err_t segment_init(const segment_desc_t *segments, size_t segment_count);
 void segment_shutdown(void);
 void segment_tick(uint32_t step_ms);
+esp_err_t segment_set_effect(const char *name,
+                             segment_effect_id_t effect_id,
+                             const void *effect_params);
 
 #endif
