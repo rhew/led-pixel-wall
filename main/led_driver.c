@@ -85,3 +85,14 @@ void led_driver_render_rgb(const uint8_t *rgb, size_t pixel_count) {
 
     ESP_ERROR_CHECK(led_strip_refresh(s_strip));
 }
+
+esp_err_t led_driver_set_pixel(size_t index, uint8_t r, uint8_t g, uint8_t b) {
+    if (!s_strip || index >= s_led_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t err = led_strip_set_pixel(s_strip, (int)index, g, r, b);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return led_strip_refresh(s_strip);
+}

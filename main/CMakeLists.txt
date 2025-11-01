@@ -4,6 +4,7 @@ idf_component_register(
         "controller_config.c"
         "ddp_server.c"
         "led_driver.c"
+        "status_indicator.c"
         "wifi_provisioning.c"
     INCLUDE_DIRS
         "."
