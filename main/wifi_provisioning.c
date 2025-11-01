@@ -13,6 +13,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "controller_config.h"
 
 #define TAG "wifi_prov"
 
@@ -51,6 +52,7 @@ static bool s_wifi_initialized;
 static const char *kDefaultPortalMessage = "Enter your Wi-Fi credentials.";
 static wifi_provisioning_status_cb_t s_status_cb;
 static void *s_status_ctx;
+static controller_config_t s_controller_cfg;
 
 static const char *status_name(wifi_provisioning_status_t status) {
     switch (status) {
@@ -372,20 +374,61 @@ static void begin_error_feedback(void) {
 
 static esp_err_t send_portal_page(httpd_req_t *req, const char *message) {
     const char *msg = message ? message : "";
+    const char *force_checked = s_state.force_24g ? " checked" : "";
     const char *html_fmt =
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>LED Wall Wi-Fi</title>"
-        "<style>body{font-family:sans-serif;margin:2rem auto;max-width:28rem;line-height:1.4;}"
-        "label{display:block;margin-top:1rem;}button{margin-top:1.5rem;padding:0.6rem 1.4rem;}""input[type=text],input[type=password]{width:100%;padding:0.5rem;}"
-        "</style></head><body><h1>Wi-Fi Setup</h1><p>%s</p><form method=\"post\" action=\"/submit\">"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>LED Wall Setup</title>"
+        "<style>body{font-family:sans-serif;margin:2rem auto;max-width:30rem;line-height:1.5;}"
+        "label{display:block;margin-top:1rem;}button{margin-top:1.5rem;padding:0.6rem 1.4rem;}"
+        "input[type=text],input[type=password],input[type=number]{width:100%;padding:0.5rem;}"
+        ".hint{font-size:0.9rem;color:#555;margin-top:0.5rem;}"
+        "</style></head><body><h1>Network & Display</h1><p>%s</p><form method=\"post\" action=\"/submit\">"
         "<label>SSID<input name=\"ssid\" type=\"text\" required></label>"
         "<label>Password<input name=\"pass\" type=\"password\"></label>"
-        "<label><input type=\"checkbox\" name=\"force\"> Force 2.4 GHz</label>"
+        "<label><input type=\"checkbox\" name=\"force\"%s> Force 2.4 GHz</label>"
+        "<label>LED Count<input name=\"led_count\" type=\"number\" min=\"1\" max=\"4096\" value=\"%u\" required>"
+        "<div class=\"hint\">Total RGB pixels connected to this controller.</div></label>"
+        "<label>DDP Port<input name=\"ddp_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"%u\" required>"
+        "<div class=\"hint\">UDP port used by the DDP streamer (WLED defaults to 4048).</div></label>"
         "<button type=\"submit\">Save & Connect</button></form></body></html>";
 
-    char buffer[1024];
-    snprintf(buffer, sizeof(buffer), html_fmt, msg);
+    int needed = snprintf(NULL,
+                          0,
+                          html_fmt,
+                          msg,
+                          force_checked,
+                          (unsigned int)s_controller_cfg.led_count,
+                          (unsigned int)s_controller_cfg.ddp_port);
+    if (needed < 0) {
+        return httpd_resp_send_err(req,
+                                   HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Failed to render portal page");
+    }
+
+    size_t buffer_size = (size_t)needed + 1;
+    char *buffer = malloc(buffer_size);
+    if (!buffer) {
+        return httpd_resp_send_err(req,
+                                   HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Out of memory");
+    }
+
+    int written = snprintf(buffer,
+                           buffer_size,
+                           html_fmt,
+                           msg,
+                           force_checked,
+                           (unsigned int)s_controller_cfg.led_count,
+                           (unsigned int)s_controller_cfg.ddp_port);
+    if (written < 0 || (size_t)written >= buffer_size) {
+        free(buffer);
+        return httpd_resp_send_err(req,
+                                   HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Failed to render portal page");
+    }
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, buffer, HTTPD_RESP_USE_STRLEN);
+    esp_err_t resp = httpd_resp_send(req, buffer, HTTPD_RESP_USE_STRLEN);
+    free(buffer);
+    return resp;
 }
 
 static esp_err_t handle_root_get(httpd_req_t *req) {
@@ -407,6 +450,8 @@ static esp_err_t handle_submit_post(httpd_req_t *req) {
 
     char ssid[33] = {0};
     char pass[65] = {0};
+    char led_count_str[8] = {0};
+    char ddp_port_str[8] = {0};
     bool force24 = false;
 
     char *token = strtok(buf, "&");
@@ -421,6 +466,10 @@ static esp_err_t handle_submit_post(httpd_req_t *req) {
                 strncpy(pass, value, sizeof(pass) - 1);
             } else if (strcmp(token, "force") == 0) {
                 force24 = true;
+            } else if (strcmp(token, "led_count") == 0) {
+                strncpy(led_count_str, value, sizeof(led_count_str) - 1);
+            } else if (strcmp(token, "ddp_port") == 0) {
+                strncpy(ddp_port_str, value, sizeof(ddp_port_str) - 1);
             }
         }
         token = strtok(NULL, "&");
@@ -431,7 +480,33 @@ static esp_err_t handle_submit_post(httpd_req_t *req) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "SSID is required");
     }
 
+    char *endptr = NULL;
+    long led_count = strtol(led_count_str, &endptr, 10);
+    if (led_count < 1 || led_count > 4096 || endptr == led_count_str || (endptr && *endptr != '\0')) {
+        ESP_LOGW(TAG, "Invalid LED count: %s", led_count_str);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "LED count must be between 1 and 4096.");
+    }
+
+    endptr = NULL;
+    long ddp_port = strtol(ddp_port_str, &endptr, 10);
+    if (ddp_port < 1 || ddp_port > 65535 || endptr == ddp_port_str || (endptr && *endptr != '\0')) {
+        ESP_LOGW(TAG, "Invalid DDP port: %s", ddp_port_str);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "DDP port must be between 1 and 65535.");
+    }
+
     ESP_LOGI(TAG, "Credentials received for SSID '%s' (force24=%s)", ssid, force24 ? "yes" : "no");
+
+    controller_config_t new_cfg = {
+        .led_count = (uint16_t)led_count,
+        .ddp_port = (uint16_t)ddp_port,
+        .has_values = true,
+    };
+    esp_err_t cfg_err = controller_config_save(&new_cfg);
+    if (cfg_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save controller config: %s", esp_err_to_name(cfg_err));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to store controller config");
+    }
+    s_controller_cfg = new_cfg;
 
     esp_err_t err = wifi_save_credentials(ssid, pass, force24);
     if (err != ESP_OK) {
@@ -487,6 +562,9 @@ static esp_err_t start_http_server(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.lru_purge_enable = true;
+    if (config.stack_size < 8192) {
+        config.stack_size = 8192;
+    }
 
     esp_err_t err = httpd_start(&s_state.httpd, &config);
     if (err != ESP_OK) {
@@ -583,6 +661,13 @@ esp_err_t wifi_provisioning_start(const wifi_provisioning_config_t *config) {
         ESP_ERROR_CHECK(esp_timer_create(&connect_args, &s_state.connect_timer));
 
         s_wifi_initialized = true;
+    }
+
+    if (controller_config_load(&s_controller_cfg) == ESP_OK) {
+        ESP_LOGI(TAG, "Controller config: led_count=%u, ddp_port=%u%s",
+                 (unsigned int)s_controller_cfg.led_count,
+                 (unsigned int)s_controller_cfg.ddp_port,
+                 s_controller_cfg.has_values ? "" : " (defaults)");
     }
 
     wifi_load_credentials();

@@ -8,17 +8,14 @@ Control a wall of pixels. Tested with:
 
 ---
 
-## IDF code for "breathing" LEDs
+## IDF code for DDP server hosting the LED wall
 
 ### Configure
 
-Use the following in `main/led-pixel-wall.c` to configure:
+Use the following in `main/app.c` to configure:
 
     #define LED_STRIP_GPIO      3       // GPIO for WS2811 data
     #define LED_COUNT           50      // Number of LEDs
-    #define MAX_BRIGHTNESS     0.5
-    #define MAX_FADING_LEDS     15
-    #define DELAY_MS            50
 
 ### Prepare
 

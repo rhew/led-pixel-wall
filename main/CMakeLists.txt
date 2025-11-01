@@ -1,16 +1,10 @@
 idf_component_register(
     SRCS
         "app.c"
-        "effects.c"
-        "effects_random_breathe.c"
-        "effects_cylon.c"
-        "effects_pattern.c"
-        "effects_fast_blink.c"
-        "effects_static_on.c"
-        "effect_registry.c"
+        "controller_config.c"
+        "ddp_server.c"
         "led_driver.c"
         "wifi_provisioning.c"
-        "segment.c"
     INCLUDE_DIRS
         "."
     REQUIRES
