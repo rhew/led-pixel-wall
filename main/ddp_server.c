@@ -40,10 +40,18 @@ typedef struct {
     TickType_t last_frame_tick;
     TickType_t last_stats_tick;
     bool stream_active;
+    uint32_t peer_ip;
+    uint16_t peer_port;
+    bool peer_valid;
     char active_peer[48];
 } ddp_state_t;
 
 static ddp_state_t s_ddp;
+
+static inline void sequence_reset(ddp_state_t *state) {
+    state->seq_initialized = false;
+    state->seq_tracking = false;
+}
 
 static void reset_state(ddp_state_t *state) {
     memset(state, 0, sizeof(*state));
@@ -196,6 +204,18 @@ static void ddp_task(void *ctx) {
                      data_len,
                      (unsigned int)state->frame_bytes);
             continue;
+        }
+
+        uint32_t source_ip = source_addr.sin_addr.s_addr;
+        uint16_t source_port = ntohs(source_addr.sin_port);
+        bool new_peer = !state->peer_valid ||
+                        state->peer_ip != source_ip ||
+                        state->peer_port != source_port;
+        if (new_peer) {
+            sequence_reset(state);
+            state->peer_ip = source_ip;
+            state->peer_port = source_port;
+            state->peer_valid = true;
         }
 
         if (!sequence_accept(state, sequence)) {
