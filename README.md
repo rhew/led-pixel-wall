@@ -15,7 +15,6 @@ Control a wall of pixels. Tested with:
 Use the following in `main/app.c` to configure:
 
     #define LED_STRIP_GPIO      3       // GPIO for WS2811 data
-    #define LED_COUNT           50      // Number of LEDs
 
 ### Prepare
 
