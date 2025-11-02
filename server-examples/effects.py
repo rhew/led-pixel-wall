@@ -6,7 +6,7 @@ import math
 import random
 import socket
 import time
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 CONTROLLER_IP = "192.168.86.32"
 CONTROLLER_PORT = 4048
@@ -110,7 +110,8 @@ class RadarTarget:
         self.x += self.vx * dt
         self.y += self.vy * dt
         if self.highlighted:
-            self.strength = max(0.0, self.strength - dt * 0.15)
+            fade_rate = 0.18  # ~5 s to fade so blips linger until the next sweep
+            self.strength = max(0.0, self.strength - dt * fade_rate)
             if self.strength <= 0.02:
                 self.highlighted = False
                 self.last_ping = None
@@ -365,7 +366,15 @@ class MouseChaseEffect:
         return pixels
 
 
-def run_effect(effect, frame_interval: float) -> None:
+EFFECTS = {
+    "radar": (RadarEffect, 0.03),
+    "heatwave": (HeatWaveEffect, 0.04),
+    "mouse": (MouseChaseEffect, 0.05),
+}
+DEMO_DURATION_SECONDS = 30.0
+
+
+def run_effect(effect, frame_interval: float, duration: Optional[float] = None) -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sequence = 0
     effect_start = time.perf_counter()
@@ -393,31 +402,51 @@ def run_effect(effect, frame_interval: float) -> None:
             sock.sendto(header + payload, (CONTROLLER_IP, CONTROLLER_PORT))
 
             sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+            elapsed_after_send = time.perf_counter() - effect_start
+            if duration is not None and elapsed_after_send >= duration:
+                break
             spent = time.perf_counter() - now
             sleep_time = max(0.0, frame_interval - spent)
             time.sleep(sleep_time)
-    except KeyboardInterrupt:
-        print("Stopping effects demo.")
     finally:
         sock.close()
+
+
+def run_demo() -> None:
+    effect_keys = list(EFFECTS.keys())
+    if not effect_keys:
+        return
+    current = random.choice(effect_keys)
+    while True:
+        factory, interval = EFFECTS[current]
+        run_effect(factory(), interval, duration=DEMO_DURATION_SECONDS)
+        next_choices = [key for key in effect_keys if key != current]
+        current = random.choice(next_choices) if next_choices else current
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LED wall effects.")
     parser.add_argument(
         "--effect",
-        choices=["radar", "heatwave", "mouse"],
+        choices=list(EFFECTS.keys()),
         default="radar",
         help="Which animation to play (default: radar).",
     )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help=f"Cycle through all effects, switching every {DEMO_DURATION_SECONDS} seconds.",
+    )
     args = parser.parse_args()
 
-    if args.effect == "heatwave":
-        run_effect(HeatWaveEffect(), frame_interval=0.04)
-    elif args.effect == "mouse":
-        run_effect(MouseChaseEffect(), frame_interval=0.05)
-    else:
-        run_effect(RadarEffect(), frame_interval=0.03)
+    try:
+        if args.demo:
+            run_demo()
+        else:
+            factory, frame_interval = EFFECTS[args.effect]
+            run_effect(factory(), frame_interval)
+    except KeyboardInterrupt:
+        print("Stopping effects demo.")
 
 
 if __name__ == "__main__":
