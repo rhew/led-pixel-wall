@@ -88,13 +88,37 @@ def geocode_location(query: str) -> Tuple[float, float]:
     return float(lat), float(lon)
 
 
+def _c_to_f(value_c: float) -> float:
+    return value_c * 9.0 / 5.0 + 32.0
+
+
 def fetch_noaa_temperature(lat: float, lon: float) -> int:
     point_url = f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}"
     point_data = _fetch_json(point_url)
     properties = point_data.get("properties", {})
+
+    stations_url = properties.get("observationStations")
+    if stations_url:
+        try:
+            stations = _fetch_json(stations_url)
+            station_features = stations.get("features", [])
+            if station_features:
+                station_id = station_features[0].get("id")
+                if station_id:
+                    latest_obs_url = f"{station_id}/observations/latest"
+                    obs_data = _fetch_json(latest_obs_url)
+                    obs_props = obs_data.get("properties", {})
+                    temp_obj = obs_props.get("temperature")
+                    if temp_obj and temp_obj.get("value") is not None:
+                        temp_c = float(temp_obj["value"])
+                        temp_f = _c_to_f(temp_c)
+                        return int(round(temp_f))
+        except Exception as exc:
+            print(f"Observation fetch failed, falling back to forecast: {exc}")
+
     forecast_url = properties.get("forecastHourly") or properties.get("forecast")
     if not forecast_url:
-        raise RuntimeError("No forecast URL in point metadata")
+        raise RuntimeError("No forecast or observation URL in point metadata")
 
     forecast_data = _fetch_json(forecast_url)
     periods = forecast_data.get("properties", {}).get("periods", [])
@@ -109,7 +133,7 @@ def fetch_noaa_temperature(lat: float, lon: float) -> int:
 
     temp_f = float(temp)
     if unit == "C":
-        temp_f = temp_f * 9.0 / 5.0 + 32.0
+        temp_f = _c_to_f(temp_f)
     return int(round(temp_f))
 
 
