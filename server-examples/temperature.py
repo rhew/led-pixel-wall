@@ -13,7 +13,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+from datetime import datetime, timezone
 
 CONTROLLER_IP = "192.168.86.32"
 CONTROLLER_PORT = 4048
@@ -25,6 +27,7 @@ RETRY_INTERVAL_SEC = 60.0
 LOCATION_QUERY = "Cary, NC"
 
 FETCH_INTERVAL_SEC = 300.0
+FRAME_INTERVAL_SEC = 1.0
 
 # NOAA requires a descriptive User-Agent with contact details.
 CONTACT_EMAIL = "contact@example.com"
@@ -49,6 +52,7 @@ DIGITS_3x5 = {
 }
 
 REQUEST_TIMEOUT = 10
+OBS_MAX_AGE_SECONDS = 3600  # fall back to forecast if observation is older than 60 minutes
 
 
 def _fetch_json(url: str, headers: dict | None = None) -> dict:
@@ -92,34 +96,66 @@ def _c_to_f(value_c: float) -> float:
     return value_c * 9.0 / 5.0 + 32.0
 
 
-def fetch_noaa_temperature(lat: float, lon: float) -> int:
+def _parse_iso_timestamp(value: str) -> Optional[datetime]:
+    try:
+        if value.endswith("Z"):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _fetch_point_properties(lat: float, lon: float) -> dict:
     point_url = f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}"
-    point_data = _fetch_json(point_url)
-    properties = point_data.get("properties", {})
+    return _fetch_json(point_url).get("properties", {})
 
-    stations_url = properties.get("observationStations")
-    if stations_url:
+
+def fetch_latest_observation(stations_url: str) -> Optional[int]:
+    stations = _fetch_json(stations_url)
+    for feature in stations.get("features", []):
+        station_id = feature.get("id")
+        if not station_id:
+            continue
         try:
-            stations = _fetch_json(stations_url)
-            station_features = stations.get("features", [])
-            if station_features:
-                station_id = station_features[0].get("id")
-                if station_id:
-                    latest_obs_url = f"{station_id}/observations/latest"
-                    obs_data = _fetch_json(latest_obs_url)
-                    obs_props = obs_data.get("properties", {})
-                    temp_obj = obs_props.get("temperature")
-                    if temp_obj and temp_obj.get("value") is not None:
-                        temp_c = float(temp_obj["value"])
-                        temp_f = _c_to_f(temp_c)
-                        return int(round(temp_f))
+            obs = _fetch_json(f"{station_id}/observations/latest")
         except Exception as exc:
-            print(f"Observation fetch failed, falling back to forecast: {exc}")
+            print(f"Failed to read observation from {station_id}: {exc}")
+            continue
 
-    forecast_url = properties.get("forecastHourly") or properties.get("forecast")
-    if not forecast_url:
-        raise RuntimeError("No forecast or observation URL in point metadata")
+        props = obs.get("properties", {})
+        temp_obj = props.get("temperature")
+        timestamp_str = props.get("timestamp")
+        if not (temp_obj and temp_obj.get("value") is not None and timestamp_str):
+            continue
 
+        timestamp = _parse_iso_timestamp(timestamp_str)
+        age_seconds = None
+        if timestamp:
+            age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+            if age_seconds > OBS_MAX_AGE_SECONDS:
+                print(f"Observation from {station_id} stale ({int(age_seconds)}s old); trying next station.")
+                continue
+
+        unit_code = (temp_obj.get("unitCode") or "").lower()
+        temp_value = float(temp_obj["value"])
+        if "celsius" in unit_code or unit_code.endswith("degc"):
+            temp_f = _c_to_f(temp_value)
+        elif "fahrenheit" in unit_code or unit_code.endswith("degf"):
+            temp_f = temp_value
+        else:
+            print(f"Unknown observation unit '{unit_code}', assuming Celsius")
+            temp_f = _c_to_f(temp_value)
+
+        print("Fetched NOAA temperature from observation: "
+              f"{int(round(temp_f))}°F "
+              f"(age {int(age_seconds) if age_seconds is not None else 'unknown'}s, station {station_id})")
+        return int(round(temp_f))
+
+    print("No fresh observations available; falling back to forecast.")
+    return None
+
+
+def fetch_forecast_temperature(forecast_url: str) -> int:
     forecast_data = _fetch_json(forecast_url)
     periods = forecast_data.get("properties", {}).get("periods", [])
     if not periods:
@@ -134,7 +170,23 @@ def fetch_noaa_temperature(lat: float, lon: float) -> int:
     temp_f = float(temp)
     if unit == "C":
         temp_f = _c_to_f(temp_f)
-    return int(round(temp_f))
+    value = int(round(temp_f))
+    print(f"Fetched NOAA temperature from forecast: {value}°F")
+    return value
+
+
+def fetch_noaa_temperature(lat: float, lon: float) -> int:
+    properties = _fetch_point_properties(lat, lon)
+    stations_url = properties.get("observationStations")
+    if stations_url:
+        temp = fetch_latest_observation(stations_url)
+        if temp is not None:
+            return temp
+
+    forecast_url = properties.get("forecastHourly") or properties.get("forecast")
+    if not forecast_url:
+        raise RuntimeError("No forecast or observation URL in point metadata")
+    return fetch_forecast_temperature(forecast_url)
 
 
 def serpentine_index(x: int, y: int) -> int:
@@ -213,8 +265,6 @@ def build_ddp_packet(sequence: int, payload: bytes) -> bytes:
     data_type = 0x01  # packed RGB
     offset = 0
     data_len = len(payload)
-    data_id = 0
-
     header = bytes([
         flags_version,
         sequence & 0xFF,
@@ -223,8 +273,8 @@ def build_ddp_packet(sequence: int, payload: bytes) -> bytes:
         offset & 0xFF,
         (data_len >> 8) & 0xFF,
         data_len & 0xFF,
-        (data_id >> 8) & 0xFF,
-        data_id & 0xFF,
+        0x00,
+        0x00,
         0x00,  # timecode (unused)
     ])
     return header + payload
@@ -238,6 +288,8 @@ def pixels_to_bytes(pixels: List[Tuple[int, int, int]]) -> bytes:
 
 
 def main():
+    controller_ip = CONTROLLER_IP
+    controller_port = CONTROLLER_PORT
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sequence = 0
     last_fetch = 0.0
@@ -280,10 +332,9 @@ def main():
             payload = pixels_to_bytes(frame)
 
             packet = build_ddp_packet(sequence, payload)
-            sock.sendto(packet, (CONTROLLER_IP, CONTROLLER_PORT))
-            print(f"Sent payload seq={sequence}")
+            sock.sendto(packet, (controller_ip, controller_port))
             sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
-            sleep_duration = RETRY_INTERVAL_SEC if error_state else FETCH_INTERVAL_SEC
+            sleep_duration = RETRY_INTERVAL_SEC if error_state else FRAME_INTERVAL_SEC
             time.sleep(sleep_duration)
     except KeyboardInterrupt:
         print("Stopping temperature demo.")
