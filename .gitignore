@@ -6,3 +6,4 @@ sdkconfig.old
 .cache
 __pycache__/
 venv/
+weather-backgrounds/

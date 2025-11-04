@@ -10,12 +10,12 @@ from the National Weather Service (api.weather.gov) and displays it on the
 import json
 import socket
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
-from typing import List, Optional, Tuple
-
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
+
+from PIL import Image
 
 CONTROLLER_IP = "192.168.86.32"
 CONTROLLER_PORT = 4048
@@ -53,6 +53,81 @@ DIGITS_3x5 = {
 
 REQUEST_TIMEOUT = 10
 OBS_MAX_AGE_SECONDS = 3600  # fall back to forecast if observation is older than 60 minutes
+DAY_DIGIT_COLOR = (25, 25, 25)
+NIGHT_DIGIT_COLOR = (240, 240, 240)
+FALLBACK_DAY_COLOR = (80, 120, 80)
+FALLBACK_NIGHT_COLOR = (0, 30, 0)
+DEFAULT_ANIMATION_KEY = "clear"
+ICON_ANIMATIONS = {
+    "clear": {
+        "day": "weather-backgrounds/clear-day.png",
+        "night": "weather-backgrounds/clear-night.png",
+    },
+    "cloudy": {
+        "day": "weather-backgrounds/cloudy-day.png",
+        "night": "weather-backgrounds/cloudy-night.png",
+    },
+    "rain": {
+        "day": "weather-backgrounds/rain-day.png",
+        "night": "weather-backgrounds/rain-night.png",
+    },
+    "thunder": {
+        "day": "weather-backgrounds/thunder-day.png",
+        "night": "weather-backgrounds/thunder-night.png",
+    },
+    "snow": {
+        "day": "weather-backgrounds/snow-day.png",
+        "night": "weather-backgrounds/snow-night.png",
+    },
+    "fog": {
+        "day": "weather-backgrounds/fog-day.png",
+        "night": "weather-backgrounds/fog-night.png",
+    },
+    "severe": {
+        "day": "weather-backgrounds/severe.png",
+        "night": "weather-backgrounds/severe.png",
+    },
+}
+ICON_CODE_TO_KEY = {
+    "skc": "clear",
+    "few": "clear",
+    "wind_skc": "clear",
+    "wind_few": "clear",
+    "hot": "clear",
+    "cold": "clear",
+    "sct": "cloudy",
+    "bkn": "cloudy",
+    "ovc": "cloudy",
+    "wind_sct": "cloudy",
+    "wind_bkn": "cloudy",
+    "wind_ovc": "cloudy",
+    "rain": "rain",
+    "rain_showers": "rain",
+    "rain_showers_hi": "rain",
+    "rain_sleet": "rain",
+    "rain_fzra": "rain",
+    "rain_snow": "snow",
+    "fzra": "rain",
+    "tsra": "thunder",
+    "tsra_sct": "thunder",
+    "tsra_hi": "thunder",
+    "sleet": "snow",
+    "snow": "snow",
+    "snow_sleet": "snow",
+    "snow_fzra": "snow",
+    "blizzard": "snow",
+    "fog": "fog",
+    "dust": "fog",
+    "smoke": "fog",
+    "haze": "fog",
+    "tornado": "severe",
+    "hurricane": "severe",
+    "tropical_storm": "severe",
+}
+FALLBACK_DAY_FRAME = [FALLBACK_DAY_COLOR] * (PANEL_WIDTH * PANEL_HEIGHT)
+FALLBACK_NIGHT_FRAME = [FALLBACK_NIGHT_COLOR] * (PANEL_WIDTH * PANEL_HEIGHT)
+FALLBACK_DURATIONS = [FRAME_INTERVAL_SEC]
+FRAME_CACHE: Dict[Tuple[str, bool], Tuple[List[List[Tuple[int, int, int]]], List[float], str]] = {}
 
 
 def _fetch_json(url: str, headers: dict | None = None) -> dict:
@@ -110,6 +185,25 @@ def _fetch_point_properties(lat: float, lon: float) -> dict:
     return _fetch_json(point_url).get("properties", {})
 
 
+def extract_icon_code(icon_url: Optional[str]) -> str:
+    if not icon_url:
+        return DEFAULT_ANIMATION_KEY
+    try:
+        parsed = urllib.parse.urlparse(icon_url)
+    except Exception:
+        return DEFAULT_ANIMATION_KEY
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return DEFAULT_ANIMATION_KEY
+    last_segment = segments[-1]
+    base = last_segment.split(",")[0].strip().lower()
+    return base or DEFAULT_ANIMATION_KEY
+
+
+def animation_key_for_icon(icon_code: str) -> str:
+    return ICON_CODE_TO_KEY.get(icon_code.lower(), DEFAULT_ANIMATION_KEY)
+
+
 def fetch_latest_observation(stations_url: str) -> Optional[int]:
     stations = _fetch_json(stations_url)
     for feature in stations.get("features", []):
@@ -155,38 +249,51 @@ def fetch_latest_observation(stations_url: str) -> Optional[int]:
     return None
 
 
-def fetch_forecast_temperature(forecast_url: str) -> int:
-    forecast_data = _fetch_json(forecast_url)
+def _extract_forecast_details(forecast_data: dict) -> Tuple[int, bool, str]:
     periods = forecast_data.get("properties", {}).get("periods", [])
     if not periods:
         raise RuntimeError("No forecast periods returned")
 
     period = periods[0]
     temp = period.get("temperature")
-    unit = period.get("temperatureUnit", "F").upper()
+    unit = (period.get("temperatureUnit") or "F").upper()
     if temp is None:
         raise RuntimeError("Temperature missing from forecast period")
 
     temp_f = float(temp)
     if unit == "C":
         temp_f = _c_to_f(temp_f)
+    is_daytime = bool(period.get("isDaytime", True))
+    icon_code = extract_icon_code(period.get("icon"))
     value = int(round(temp_f))
     print(f"Fetched NOAA temperature from forecast: {value}°F")
-    return value
+    return value, is_daytime, icon_code
 
 
-def fetch_noaa_temperature(lat: float, lon: float) -> int:
+def fetch_noaa_temperature(lat: float, lon: float) -> Tuple[int, bool, str]:
     properties = _fetch_point_properties(lat, lon)
-    stations_url = properties.get("observationStations")
-    if stations_url:
-        temp = fetch_latest_observation(stations_url)
-        if temp is not None:
-            return temp
-
     forecast_url = properties.get("forecastHourly") or properties.get("forecast")
     if not forecast_url:
         raise RuntimeError("No forecast or observation URL in point metadata")
-    return fetch_forecast_temperature(forecast_url)
+
+    stations_url = properties.get("observationStations")
+    forecast_data: Optional[dict] = None
+
+    if stations_url:
+        temp = fetch_latest_observation(stations_url)
+        if temp is not None:
+            try:
+                forecast_data = _fetch_json(forecast_url)
+                _, is_daytime, icon_code = _extract_forecast_details(forecast_data)
+            except Exception as exc:
+                print(f"Failed to determine day/night from forecast: {exc}")
+                is_daytime = True
+                icon_code = DEFAULT_ANIMATION_KEY
+            return temp, is_daytime, icon_code
+
+    if forecast_data is None:
+        forecast_data = _fetch_json(forecast_url)
+    return _extract_forecast_details(forecast_data)
 
 
 def serpentine_index(x: int, y: int) -> int:
@@ -201,30 +308,8 @@ def serpentine_index(x: int, y: int) -> int:
     return idx
 
 
-def clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
-def temperature_tint(temp_f: int) -> Tuple[int, int, int]:
-    """Map the Fahrenheit reading to a full-intensity red or blue tint."""
-    if temp_f <= 32:
-        intensity = clamp((32 - temp_f) / 32.0, 0.0, 1.0)
-        fade = int(255 * (1.0 - intensity))
-        return (fade, fade, 255)
-    else:
-        intensity = clamp((temp_f - 32) / (100 - 32), 0.0, 1.0)
-        fade = int(255 * (1.0 - intensity))
-        return (255, fade, fade)
-
-
-def render_temperature(temp_f: int) -> List[Tuple[int, int, int]]:
-    """
-    Render the temperature onto a 10×5 canvas.
-    Returns a list of 50 RGB tuples in panel order.
-    """
-    tint_color = temperature_tint(temp_f)
-
-    canvas = [[(0, 0, 0) for _ in range(PANEL_WIDTH)] for _ in range(PANEL_HEIGHT)]
+def render_temperature(temp_f: int, base_pixels: List[Tuple[int, int, int]], digit_color: Tuple[int, int, int]) -> List[Tuple[int, int, int]]:
+    pixels = base_pixels[:]
 
     temp_str = str(temp_f)
     glyphs = [DIGITS_3x5.get(ch, DIGITS_3x5[" "]) for ch in temp_str]
@@ -245,14 +330,10 @@ def render_temperature(temp_f: int) -> List[Tuple[int, int, int]]:
                 if bit == "1":
                     px = x + dx
                     if 0 <= px < PANEL_WIDTH and 0 <= y < PANEL_HEIGHT:
-                        canvas[y][px] = tint_color
+                        idx = serpentine_index(px, y)
+                        pixels[idx] = digit_color
         x += width + spacing
 
-    pixels = [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
-    for y in range(PANEL_HEIGHT):
-        for x in range(PANEL_WIDTH):
-            idx = serpentine_index(x, y)
-            pixels[idx] = canvas[y][x]
     return pixels
 
 
@@ -287,15 +368,79 @@ def pixels_to_bytes(pixels: List[Tuple[int, int, int]]) -> bytes:
     return bytes(buf)
 
 
+def load_background_frames(path: str) -> Tuple[List[List[Tuple[int, int, int]]], List[float]]:
+    image = Image.open(path)
+    frames: List[List[Tuple[int, int, int]]] = []
+    durations: List[float] = []
+    try:
+        frame_count = getattr(image, "n_frames", 1)
+        for idx in range(frame_count):
+            image.seek(idx)
+            rgb = image.convert("RGB")
+            if rgb.size != (PANEL_WIDTH, PANEL_HEIGHT):
+                raise RuntimeError(f"Background image must be {PANEL_WIDTH}x{PANEL_HEIGHT}")
+            raw = list(rgb.getdata())
+            ordered = [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
+            for y in range(PANEL_HEIGHT):
+                for x in range(PANEL_WIDTH):
+                    ordered[serpentine_index(x, y)] = raw[y * PANEL_WIDTH + x]
+            frames.append(ordered)
+            duration_ms = image.info.get("duration", FRAME_INTERVAL_SEC * 1000.0)
+            durations.append(max(duration_ms / 1000.0, 0.05) if frame_count > 1 else FRAME_INTERVAL_SEC)
+    finally:
+        image.close()
+    if not durations:
+        durations = [FRAME_INTERVAL_SEC]
+    return frames, durations
+
+
+def get_background_frames(animation_key: str, is_daytime: bool) -> Tuple[List[List[Tuple[int, int, int]]], List[float], str]:
+    cache_key = (animation_key, is_daytime)
+    if cache_key in FRAME_CACHE:
+        return FRAME_CACHE[cache_key]
+
+    variant = "day" if is_daytime else "night"
+    lookup_order = [animation_key]
+    if animation_key != DEFAULT_ANIMATION_KEY:
+        lookup_order.append(DEFAULT_ANIMATION_KEY)
+
+    for key in lookup_order:
+        variant_map = ICON_ANIMATIONS.get(key)
+        if not variant_map:
+            continue
+        path = variant_map.get(variant)
+        if not path:
+            continue
+        try:
+            frames, durations = load_background_frames(path)
+            FRAME_CACHE[cache_key] = (frames, durations, path)
+            return FRAME_CACHE[cache_key]
+        except Exception as exc:
+            print(f"Failed to load background '{path}': {exc}")
+
+    fallback_frames = [FALLBACK_DAY_FRAME] if is_daytime else [FALLBACK_NIGHT_FRAME]
+    source = f"fallback-{variant}"
+    print(f"Using fallback background for {variant} '{animation_key}'.")
+    FRAME_CACHE[cache_key] = (fallback_frames, FALLBACK_DURATIONS[:], source)
+    return FRAME_CACHE[cache_key]
+
+
 def main():
     controller_ip = CONTROLLER_IP
     controller_port = CONTROLLER_PORT
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sequence = 0
     last_fetch = 0.0
-    current_temp = None
-    render_pixels = None
+    current_temp: Optional[int] = None
+    is_daytime: bool = False
+    icon_key = DEFAULT_ANIMATION_KEY
     error_state = False
+    frame_index = 0
+    digit_color = NIGHT_DIGIT_COLOR
+    background_frames, frame_durations, background_source = get_background_frames(icon_key, is_daytime)
+    current_background_key = icon_key
+    current_background_daytime = is_daytime
+    current_background_source = background_source
 
     try:
         lat, lon = geocode_location(LOCATION_QUERY)
@@ -309,23 +454,31 @@ def main():
             should_fetch = current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC
             if should_fetch:
                 try:
-                    current_temp = fetch_noaa_temperature(lat, lon)
+                    current_temp, is_daytime, icon_code = fetch_noaa_temperature(lat, lon)
                     last_fetch = now
-                    print(f"Fetched NOAA temperature: {current_temp}°F")
-                    render_pixels = render_temperature(current_temp)
+                    print(f"Fetched NOAA temperature: {current_temp}°F ({'day' if is_daytime else 'night'})")
+                    digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
+                    icon_key = animation_key_for_icon(icon_code)
+                    if icon_key != current_background_key or is_daytime != current_background_daytime:
+                        background_frames, frame_durations, background_source = get_background_frames(icon_key, is_daytime)
+                        current_background_key = icon_key
+                        current_background_daytime = is_daytime
+                        current_background_source = background_source
+                        frame_index = 0
+                    print(
+                        f"Forecast state: {'day' if is_daytime else 'night'}, "
+                        f"icon='{icon_code}', animation='{current_background_source}'"
+                    )
                     error_state = False
                 except Exception as exc:
                     print(f"NOAA fetch failed: {exc}")
                     last_fetch = now - (FETCH_INTERVAL_SEC - RETRY_INTERVAL_SEC)
                     error_state = True
-                    if render_pixels is None and current_temp is not None:
-                        render_pixels = render_temperature(current_temp)
-
-            frame = (
-                render_pixels[:]
-                if render_pixels is not None
-                else [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
-            )
+            base_pixels = background_frames[frame_index]
+            if current_temp is not None:
+                frame = render_temperature(current_temp, base_pixels, digit_color)
+            else:
+                frame = base_pixels[:]
             if error_state:
                 idx = serpentine_index(0, 0)
                 frame[idx] = (255, 0, 0)
@@ -334,8 +487,10 @@ def main():
             packet = build_ddp_packet(sequence, payload)
             sock.sendto(packet, (controller_ip, controller_port))
             sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
-            sleep_duration = RETRY_INTERVAL_SEC if error_state else FRAME_INTERVAL_SEC
-            time.sleep(sleep_duration)
+            duration = frame_durations[frame_index]
+            frame_index = (frame_index + 1) % len(background_frames)
+            sleep_duration = min(RETRY_INTERVAL_SEC, duration) if error_state else duration
+            time.sleep(max(sleep_duration, 0.01))
     except KeyboardInterrupt:
         print("Stopping temperature demo.")
     finally:
