@@ -4,9 +4,11 @@ NOAA temperature demo for the LED Pixel Wall.
 
 Periodically fetches the latest hourly forecast temperature in Fahrenheit
 from the National Weather Service (api.weather.gov) and displays it on the
-10×5 pixel wall via DDP.
+10×5 pixel wall via DDP. A --test-backgrounds mode cycles through all
+weather animations for quick visual validation.
 """
 
+import argparse
 import json
 import socket
 import time
@@ -57,7 +59,14 @@ DAY_DIGIT_COLOR = (25, 25, 25)
 NIGHT_DIGIT_COLOR = (240, 240, 240)
 FALLBACK_DAY_COLOR = (80, 120, 80)
 FALLBACK_NIGHT_COLOR = (0, 30, 0)
+CANDIDATE_DIGIT_COLORS = [
+    (245, 245, 245),
+    (220, 220, 220),
+    (40, 40, 40),
+    (15, 15, 15),
+]
 DEFAULT_ANIMATION_KEY = "clear"
+TEST_MODE_TEMPERATURE = 72
 ICON_ANIMATIONS = {
     "clear": {
         "day": "weather-backgrounds/clear-day.png",
@@ -127,7 +136,10 @@ ICON_CODE_TO_KEY = {
 FALLBACK_DAY_FRAME = [FALLBACK_DAY_COLOR] * (PANEL_WIDTH * PANEL_HEIGHT)
 FALLBACK_NIGHT_FRAME = [FALLBACK_NIGHT_COLOR] * (PANEL_WIDTH * PANEL_HEIGHT)
 FALLBACK_DURATIONS = [FRAME_INTERVAL_SEC]
-FRAME_CACHE: Dict[Tuple[str, bool], Tuple[List[List[Tuple[int, int, int]]], List[float], str]] = {}
+FRAME_CACHE: Dict[
+    Tuple[str, bool],
+    Tuple[List[List[Tuple[int, int, int]]], List[float], str, Tuple[int, int, int]],
+] = {}
 
 
 def _fetch_json(url: str, headers: dict | None = None) -> dict:
@@ -185,6 +197,57 @@ def _fetch_point_properties(lat: float, lon: float) -> dict:
     return _fetch_json(point_url).get("properties", {})
 
 
+def _relative_luminance(color: Tuple[int, int, int]) -> float:
+    def _channel(value: int) -> float:
+        normalized = value / 255.0
+        if normalized <= 0.03928:
+            return normalized / 12.92
+        return ((normalized + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (_channel(color[0]), _channel(color[1]), _channel(color[2]))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _frame_average_luminance(frame: List[Tuple[int, int, int]]) -> float:
+    if not frame:
+        return 0.0
+    return sum(_relative_luminance(pixel) for pixel in frame) / len(frame)
+
+
+def _contrast_ratio(lum_a: float, lum_b: float) -> float:
+    brighter = max(lum_a, lum_b)
+    darker = min(lum_a, lum_b)
+    return (brighter + 0.05) / (darker + 0.05)
+
+
+def _choose_digit_color(frames: List[List[Tuple[int, int, int]]]) -> Tuple[int, int, int]:
+    if not frames:
+        return NIGHT_DIGIT_COLOR
+
+    sample_indices = {0, len(frames) // 2, len(frames) - 1}
+    sample_luminance = [
+        _frame_average_luminance(frames[idx])
+        for idx in sorted(sample_indices)
+        if 0 <= idx < len(frames)
+    ]
+    if not sample_luminance:
+        sample_luminance = [_frame_average_luminance(frames[0])]
+
+    best_color = CANDIDATE_DIGIT_COLORS[0]
+    best_score = -1.0
+    for candidate in CANDIDATE_DIGIT_COLORS:
+        cand_lum = _relative_luminance(candidate)
+        score = (
+            sum(_contrast_ratio(cand_lum, background) for background in sample_luminance)
+            / len(sample_luminance)
+        )
+        if score > best_score:
+            best_score = score
+            best_color = candidate
+
+    return best_color
+
+
 def extract_icon_code(icon_url: Optional[str]) -> str:
     if not icon_url:
         return DEFAULT_ANIMATION_KEY
@@ -227,7 +290,10 @@ def fetch_latest_observation(stations_url: str) -> Optional[int]:
         if timestamp:
             age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
             if age_seconds > OBS_MAX_AGE_SECONDS:
-                print(f"Observation from {station_id} stale ({int(age_seconds)}s old); trying next station.")
+                print(
+                    f"Observation from {station_id} stale "
+                    f"({int(age_seconds)}s old); trying next station."
+                )
                 continue
 
         unit_code = (temp_obj.get("unitCode") or "").lower()
@@ -240,9 +306,12 @@ def fetch_latest_observation(stations_url: str) -> Optional[int]:
             print(f"Unknown observation unit '{unit_code}', assuming Celsius")
             temp_f = _c_to_f(temp_value)
 
-        print("Fetched NOAA temperature from observation: "
-              f"{int(round(temp_f))}°F "
-              f"(age {int(age_seconds) if age_seconds is not None else 'unknown'}s, station {station_id})")
+        print(
+            "Fetched NOAA temperature from observation: "
+            f"{int(round(temp_f))}°F "
+            f"(age {int(age_seconds) if age_seconds is not None else 'unknown'}s,"
+            f" station {station_id})"
+        )
         return int(round(temp_f))
 
     print("No fresh observations available; falling back to forecast.")
@@ -308,7 +377,11 @@ def serpentine_index(x: int, y: int) -> int:
     return idx
 
 
-def render_temperature(temp_f: int, base_pixels: List[Tuple[int, int, int]], digit_color: Tuple[int, int, int]) -> List[Tuple[int, int, int]]:
+def render_temperature(
+    temp_f: int,
+    base_pixels: List[Tuple[int, int, int]],
+    digit_color: Tuple[int, int, int],
+) -> List[Tuple[int, int, int]]:
     pixels = base_pixels[:]
 
     temp_str = str(temp_f)
@@ -386,7 +459,10 @@ def load_background_frames(path: str) -> Tuple[List[List[Tuple[int, int, int]]],
                     ordered[serpentine_index(x, y)] = raw[y * PANEL_WIDTH + x]
             frames.append(ordered)
             duration_ms = image.info.get("duration", FRAME_INTERVAL_SEC * 1000.0)
-            durations.append(max(duration_ms / 1000.0, 0.05) if frame_count > 1 else FRAME_INTERVAL_SEC)
+            frame_duration = max(duration_ms / 1000.0, 0.05)
+            if frame_count == 1:
+                frame_duration = FRAME_INTERVAL_SEC
+            durations.append(frame_duration)
     finally:
         image.close()
     if not durations:
@@ -394,7 +470,10 @@ def load_background_frames(path: str) -> Tuple[List[List[Tuple[int, int, int]]],
     return frames, durations
 
 
-def get_background_frames(animation_key: str, is_daytime: bool) -> Tuple[List[List[Tuple[int, int, int]]], List[float], str]:
+def get_background_frames(
+    animation_key: str,
+    is_daytime: bool,
+) -> Tuple[List[List[Tuple[int, int, int]]], List[float], str, Tuple[int, int, int]]:
     cache_key = (animation_key, is_daytime)
     if cache_key in FRAME_CACHE:
         return FRAME_CACHE[cache_key]
@@ -413,7 +492,8 @@ def get_background_frames(animation_key: str, is_daytime: bool) -> Tuple[List[Li
             continue
         try:
             frames, durations = load_background_frames(path)
-            FRAME_CACHE[cache_key] = (frames, durations, path)
+            digit_color = _choose_digit_color(frames)
+            FRAME_CACHE[cache_key] = (frames, durations, path, digit_color)
             return FRAME_CACHE[cache_key]
         except Exception as exc:
             print(f"Failed to load background '{path}': {exc}")
@@ -421,13 +501,97 @@ def get_background_frames(animation_key: str, is_daytime: bool) -> Tuple[List[Li
     fallback_frames = [FALLBACK_DAY_FRAME] if is_daytime else [FALLBACK_NIGHT_FRAME]
     source = f"fallback-{variant}"
     print(f"Using fallback background for {variant} '{animation_key}'.")
-    FRAME_CACHE[cache_key] = (fallback_frames, FALLBACK_DURATIONS[:], source)
+    fallback_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
+    FRAME_CACHE[cache_key] = (fallback_frames, FALLBACK_DURATIONS[:], source, fallback_color)
     return FRAME_CACHE[cache_key]
 
 
-def main():
-    controller_ip = CONTROLLER_IP
-    controller_port = CONTROLLER_PORT
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="LED wall weather display")
+    parser.add_argument(
+        "--controller-ip",
+        default=CONTROLLER_IP,
+        help=f"Controller IP address (default: {CONTROLLER_IP})",
+    )
+    parser.add_argument(
+        "--controller-port",
+        type=int,
+        default=CONTROLLER_PORT,
+        help=f"Controller UDP port (default: {CONTROLLER_PORT})",
+    )
+    parser.add_argument(
+        "--test-backgrounds",
+        action="store_true",
+        help="Cycle through every background animation instead of fetching NOAA data.",
+    )
+    return parser.parse_args()
+
+
+def run_background_test(args: argparse.Namespace) -> None:
+    backgrounds: List[
+        Tuple[str, List[List[Tuple[int, int, int]]], List[float], Tuple[int, int, int]]
+    ] = []
+    for key, variants in ICON_ANIMATIONS.items():
+        for is_day, variant_name in ((True, "day"), (False, "night")):
+            if variant_name not in variants:
+                continue
+            frames, durations, source, digit_color = get_background_frames(key, is_day)
+            label = f"{key}-{variant_name} ({source})"
+            backgrounds.append((label, frames, durations, digit_color))
+
+    backgrounds.append((
+        "fallback-day",
+        [FALLBACK_DAY_FRAME],
+        FALLBACK_DURATIONS[:],
+        DAY_DIGIT_COLOR,
+    ))
+    backgrounds.append((
+        "fallback-night",
+        [FALLBACK_NIGHT_FRAME],
+        FALLBACK_DURATIONS[:],
+        NIGHT_DIGIT_COLOR,
+    ))
+
+    if not backgrounds:
+        print("No backgrounds available for testing.")
+        return
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sequence = 0
+    print("Entering background test mode. Press Ctrl-C to stop.")
+    try:
+        while True:
+            for label, frames, durations, digit_color in backgrounds:
+                print(f"Displaying '{label}' with digit color {digit_color}")
+                cycle_duration = sum(durations) if durations else FRAME_INTERVAL_SEC * len(frames)
+                min_duration = max(3.0, 2.0 * cycle_duration)
+                start_time = time.time()
+                frame_idx = 0
+                while True:
+                    base_pixels = frames[frame_idx]
+                    frame = render_temperature(TEST_MODE_TEMPERATURE, base_pixels, digit_color)
+                    payload = pixels_to_bytes(frame)
+                    packet = build_ddp_packet(sequence, payload)
+                    sock.sendto(packet, (args.controller_ip, args.controller_port))
+                    sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+                    if durations:
+                        duration = durations[frame_idx % len(durations)]
+                    else:
+                        duration = FRAME_INTERVAL_SEC
+                    time.sleep(max(duration, 0.01))
+                    frame_idx = (frame_idx + 1) % len(frames)
+                    elapsed = time.time() - start_time
+                    if frame_idx == 0 and elapsed >= min_duration:
+                        break
+    except KeyboardInterrupt:
+        print("Background test stopped.")
+    finally:
+        sock.close()
+
+
+def run_weather_display(args: argparse.Namespace) -> None:
+    controller_ip = args.controller_ip
+    controller_port = args.controller_port
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sequence = 0
     last_fetch = 0.0
@@ -436,8 +600,13 @@ def main():
     icon_key = DEFAULT_ANIMATION_KEY
     error_state = False
     frame_index = 0
-    digit_color = NIGHT_DIGIT_COLOR
-    background_frames, frame_durations, background_source = get_background_frames(icon_key, is_daytime)
+    (
+        background_frames,
+        frame_durations,
+        background_source,
+        recommended_color,
+    ) = get_background_frames(icon_key, is_daytime)
+    current_digit_color = recommended_color
     current_background_key = icon_key
     current_background_daytime = is_daytime
     current_background_source = background_source
@@ -456,17 +625,33 @@ def main():
                 try:
                     current_temp, is_daytime, icon_code = fetch_noaa_temperature(lat, lon)
                     last_fetch = now
-                    print(f"Fetched NOAA temperature: {current_temp}°F ({'day' if is_daytime else 'night'})")
-                    digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
+                    print(
+                        "Fetched NOAA temperature: "
+                        f"{current_temp}°F "
+                        f"({'day' if is_daytime else 'night'})"
+                    )
                     icon_key = animation_key_for_icon(icon_code)
-                    if icon_key != current_background_key or is_daytime != current_background_daytime:
-                        background_frames, frame_durations, background_source = get_background_frames(icon_key, is_daytime)
+                    background_changed = icon_key != current_background_key
+                    day_state_changed = is_daytime != current_background_daytime
+                    if background_changed or day_state_changed:
+                        (
+                            background_frames,
+                            frame_durations,
+                            background_source,
+                            recommended_color,
+                        ) = get_background_frames(icon_key, is_daytime)
                         current_background_key = icon_key
                         current_background_daytime = is_daytime
                         current_background_source = background_source
+                        current_digit_color = recommended_color
                         frame_index = 0
+                    else:
+                        cached_entry = FRAME_CACHE.get((icon_key, is_daytime))
+                        if cached_entry:
+                            current_digit_color = cached_entry[3]
                     print(
-                        f"Forecast state: {'day' if is_daytime else 'night'}, "
+                        "Forecast state: "
+                        f"{'day' if is_daytime else 'night'}, "
                         f"icon='{icon_code}', animation='{current_background_source}'"
                     )
                     error_state = False
@@ -476,7 +661,7 @@ def main():
                     error_state = True
             base_pixels = background_frames[frame_index]
             if current_temp is not None:
-                frame = render_temperature(current_temp, base_pixels, digit_color)
+                frame = render_temperature(current_temp, base_pixels, current_digit_color)
             else:
                 frame = base_pixels[:]
             if error_state:
@@ -495,6 +680,14 @@ def main():
         print("Stopping temperature demo.")
     finally:
         sock.close()
+
+
+def main() -> None:
+    args = parse_args()
+    if args.test_backgrounds:
+        run_background_test(args)
+    else:
+        run_weather_display(args)
 
 
 if __name__ == "__main__":
