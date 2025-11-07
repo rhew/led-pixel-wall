@@ -34,8 +34,8 @@ SNOW_FRAME_DURATION_MS = 270
 SLEET_TAIL_INTENSITY = (1.0,)
 SLEET_FRAME_DURATION_MS = 30
 THUNDER_LIGHTNING_FRAMES = 2
-SEVERE_FRAME_COUNT = 36
-SEVERE_FRAME_DURATION_MS = 90
+SEVERE_FRAME_COUNT = 30
+SEVERE_FRAME_DURATION_MS = 50
 SEVERE_INNER_COLOR = (40, 0, 0)
 SEVERE_OUTER_COLOR = (255, 48, 48)
 FOG_FRAME_COUNT = 36
@@ -242,40 +242,21 @@ def _render_phase_field(
 
 
 def create_severe_animation(path: Path, width: int, height: int) -> None:
-    center_x = (width - 1) / 2.0
-    center_y = (height - 1) / 2.0
+    frames: List[Image.Image] = []
+    for frame_index in range(SEVERE_FRAME_COUNT):
+        phase = frame_index / SEVERE_FRAME_COUNT
+        intensity = 0.3 + 0.7 * (0.5 * (1 + math.sin(2 * math.pi * phase)))
+        color = _lerp_color(SEVERE_INNER_COLOR, SEVERE_OUTER_COLOR, intensity)
+        frame = Image.new("RGB", (width, height), color)
+        frames.append(frame)
 
-    max_distance = 1e-6
-    for x in range(width):
-        for y in range(height):
-            max_distance = max(max_distance, math.hypot(x - center_x, y - center_y))
-
-    def generator(x: int, y: int) -> Tuple[float, float, float]:
-        distance = math.hypot(x - center_x, y - center_y)
-        normalized = min(1.0, max(0.0, distance / max_distance))
-        weight = 1.0 - normalized
-        angle = normalized * math.pi * 3.0
-        scale = 0.6 + 0.4 * weight
-        return math.cos(angle) * scale, math.sin(angle) * scale, weight
-
-    cos_field, sin_field, amplitude_max, weight_field = _build_phase_field(width, height, generator)
-
-    def pixel_fn(_: int, __: int, mix: float, extra: Optional[float]) -> tuple[int, int, int]:
-        base_mix = extra if extra is not None else 0.0
-        blend = max(0.0, min(1.0, 0.4 * base_mix + 0.6 * (0.5 + 0.5 * mix)))
-        return _lerp_color(SEVERE_INNER_COLOR, SEVERE_OUTER_COLOR, blend)
-
-    _render_phase_field(
+    first, *rest = frames
+    first.save(
         path,
-        width,
-        height,
-        SEVERE_FRAME_COUNT,
-        SEVERE_FRAME_DURATION_MS,
-        cos_field,
-        sin_field,
-        amplitude_max,
-        weight_field,
-        pixel_fn,
+        save_all=True,
+        append_images=rest,
+        loop=0,
+        duration=SEVERE_FRAME_DURATION_MS,
     )
 
 
