@@ -22,12 +22,14 @@ from typing import Callable, Iterable, List, Optional, Tuple
 
 from PIL import Image
 
-DAY_COLOR = (0, 80, 255)        # Bright blue sky
-NIGHT_COLOR = (0, 0, 0)         # Unlit / night
+DAY_COLOR = (0, 80, 255)
+NIGHT_COLOR = (0, 0, 0)
 RAIN_DROP_COLOR = (220, 240, 255)
 RAIN_TAIL_INTENSITY = (1.0, 0.65, 0.4, 0.2)
 RAIN_FRAME_DURATION_MS = 120
 PRECIP_DAY_CLOUD = (50, 50, 50)
+CLOUD_DAY_SKY = (220, 220, 220)
+CLOUD_NIGHT_SKY = (60, 60, 60)
 PRECIP_DAY_SKY = (50, 50, 200)
 SNOW_TAIL_INTENSITY = (1.0,)
 SNOW_FRAME_DURATION_MS = 270
@@ -68,8 +70,8 @@ def _build_gradient_rows(
         if raw_t <= top_fraction:
             t = 0.0
         else:
-            denominator = max(1e-6, 1.0 - top_fraction)
-            t = (raw_t - top_fraction) / denominator
+            normalized = (raw_t - top_fraction) / max(1e-6, 1.0 - top_fraction)
+            t = 1.0 - math.exp(-4.0 * normalized)
 
         rows.append(tuple(
             int(cloud_color[c] + (sky_color[c] - cloud_color[c]) * t)
@@ -101,7 +103,7 @@ def _build_drop_schedule(width: int, drop_span: int) -> List[tuple[int, int]]:
     return schedule
 
 
-def create_percipitation_png(
+def create_precipitation_png(
     path: Path,
     width: int,
     height: int,
@@ -159,6 +161,23 @@ def create_percipitation_png(
         loop=0,
         duration=frame_duration_ms,
     )
+
+
+def create_gradient_png(
+    path: Path,
+    width: int,
+    height: int,
+    cloud_color: tuple[int, int, int],
+    sky_color: tuple[int, int, int],
+) -> None:
+    rows = _build_gradient_rows(height, cloud_color, sky_color)
+    frame = Image.new("RGB", (width, height))
+    pixels = frame.load()
+    for y in range(height):
+        row_color = rows[y]
+        for x in range(width):
+            pixels[x, y] = row_color
+    frame.save(path, format="PNG")
 
 
 def _lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -338,6 +357,10 @@ def main() -> None:
     snow_night_path = output_dir / "snow-night.png"
     sleet_day_path = output_dir / "sleet-day.png"
     sleet_night_path = output_dir / "sleet-night.png"
+    cloudy_day_path = output_dir / "cloudy-day.png"
+    cloudy_night_path = output_dir / "cloudy-night.png"
+    overcast_day_path = output_dir / "overcast-day.png"
+    overcast_night_path = output_dir / "overcast-night.png"
     thunder_day_path = output_dir / "thunder-day.png"
     thunder_night_path = output_dir / "thunder-night.png"
     fog_day_path = output_dir / "fog-day.png"
@@ -346,7 +369,7 @@ def main() -> None:
 
     create_png(day_path, args.width, args.height, DAY_COLOR)
     create_png(night_path, args.width, args.height, NIGHT_COLOR)
-    create_percipitation_png(
+    create_precipitation_png(
         rain_day_path,
         args.width,
         args.height,
@@ -355,7 +378,7 @@ def main() -> None:
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         rain_night_path,
         args.width,
         args.height,
@@ -364,7 +387,7 @@ def main() -> None:
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         snow_day_path,
         args.width,
         args.height,
@@ -373,7 +396,7 @@ def main() -> None:
         tail_intensity=SNOW_TAIL_INTENSITY,
         frame_duration_ms=SNOW_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         snow_night_path,
         args.width,
         args.height,
@@ -382,7 +405,7 @@ def main() -> None:
         tail_intensity=SNOW_TAIL_INTENSITY,
         frame_duration_ms=SNOW_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         sleet_day_path,
         args.width,
         args.height,
@@ -391,7 +414,7 @@ def main() -> None:
         tail_intensity=SLEET_TAIL_INTENSITY,
         frame_duration_ms=SLEET_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         sleet_night_path,
         args.width,
         args.height,
@@ -400,7 +423,35 @@ def main() -> None:
         tail_intensity=SLEET_TAIL_INTENSITY,
         frame_duration_ms=SLEET_FRAME_DURATION_MS,
     )
-    create_percipitation_png(
+    create_gradient_png(
+        cloudy_day_path,
+        args.width,
+        args.height,
+        CLOUD_DAY_SKY,
+        PRECIP_DAY_SKY,
+    )
+    create_gradient_png(
+        cloudy_night_path,
+        args.width,
+        args.height,
+        CLOUD_NIGHT_SKY,
+        NIGHT_COLOR,
+    )
+    create_gradient_png(
+        overcast_day_path,
+        args.width,
+        args.height,
+        PRECIP_DAY_CLOUD,
+        PRECIP_DAY_SKY,
+    )
+    create_gradient_png(
+        overcast_night_path,
+        args.width,
+        args.height,
+        PRECIP_DAY_CLOUD,
+        NIGHT_COLOR,
+    )
+    create_precipitation_png(
         thunder_day_path,
         args.width,
         args.height,
@@ -410,11 +461,11 @@ def main() -> None:
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
         with_lightning=True,
     )
-    create_percipitation_png(
+    create_precipitation_png(
         thunder_night_path,
         args.width,
         args.height,
-        NIGHT_COLOR,
+        PRECIP_DAY_CLOUD,
         NIGHT_COLOR,
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,

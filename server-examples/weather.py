@@ -70,6 +70,10 @@ ICON_ANIMATIONS = {
         "day": "weather-backgrounds/cloudy-day.png",
         "night": "weather-backgrounds/cloudy-night.png",
     },
+    "overcast": {
+        "day": "weather-backgrounds/overcast-day.png",
+        "night": "weather-backgrounds/overcast-night.png",
+    },
     "rain": {
         "day": "weather-backgrounds/rain-day.png",
         "night": "weather-backgrounds/rain-night.png",
@@ -104,10 +108,10 @@ ICON_CODE_TO_KEY = {
     "cold": "clear",
     "sct": "cloudy",
     "bkn": "cloudy",
-    "ovc": "cloudy",
+    "ovc": "overcast",
     "wind_sct": "cloudy",
     "wind_bkn": "cloudy",
-    "wind_ovc": "cloudy",
+    "wind_ovc": "overcast",
     "rain": "rain",
     "rain_showers": "rain",
     "rain_showers_hi": "rain",
