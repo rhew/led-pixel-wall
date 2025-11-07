@@ -52,23 +52,33 @@ def create_png(path: Path, width: int, height: int, color: tuple[int, int, int])
     image.save(path, format="PNG")
 
 
-def create_percipitation_png(
-    path: Path,
-    width: int,
+def _build_gradient_rows(
     height: int,
     cloud_color: tuple[int, int, int],
     sky_color: tuple[int, int, int],
-    tail_intensity: Iterable[float] = RAIN_TAIL_INTENSITY,
-    frame_duration_ms: int = RAIN_FRAME_DURATION_MS,
-    with_lightning: bool = False,
-) -> None:
-    """Create a looping precipitation animation as an animated PNG."""
-    if width < 1 or height < 1:
-        raise ValueError("Width and height must be positive for precipitation animation.")
+    top_fraction: float = 0.3,
+) -> List[Tuple[int, int, int]]:
+    rows: List[Tuple[int, int, int]] = []
+    for y in range(height):
+        if height == 1:
+            raw_t = 0.0
+        else:
+            raw_t = y / (height - 1)
 
-    drop_span = height
-    tail_values = list(tail_intensity) or [1.0]
+        if raw_t <= top_fraction:
+            t = 0.0
+        else:
+            denominator = max(1e-6, 1.0 - top_fraction)
+            t = (raw_t - top_fraction) / denominator
 
+        rows.append(tuple(
+            int(cloud_color[c] + (sky_color[c] - cloud_color[c]) * t)
+            for c in range(3)
+        ))
+    return rows
+
+
+def _build_drop_schedule(width: int, drop_span: int) -> List[tuple[int, int]]:
     if width == 1:
         column_order = [0]
     elif width == 2:
@@ -88,26 +98,28 @@ def create_percipitation_png(
         schedule.append((current_start, column))
         current_start += spacing
         current_start += ((current_start // spacing) % jitter)
+    return schedule
 
+
+def create_percipitation_png(
+    path: Path,
+    width: int,
+    height: int,
+    cloud_color: tuple[int, int, int],
+    sky_color: tuple[int, int, int],
+    tail_intensity: Iterable[float] = RAIN_TAIL_INTENSITY,
+    frame_duration_ms: int = RAIN_FRAME_DURATION_MS,
+    with_lightning: bool = False,
+) -> None:
+    """Create a looping precipitation animation as an animated PNG."""
+    if width < 1 or height < 1:
+        raise ValueError("Width and height must be positive for precipitation animation.")
+
+    drop_span = height
+    tail_values = list(tail_intensity) or [1.0]
+    schedule = _build_drop_schedule(width, drop_span)
     total_frames = schedule[-1][0] + drop_span
-
-    gradient_rows: List[Tuple[int, int, int]] = []
-    top_fraction = 0.3
-    for y in range(height):
-        if height == 1:
-            raw_t = 0.0
-        else:
-            raw_t = y / (height - 1)
-        if raw_t <= top_fraction:
-            t = 0.0
-        else:
-            denominator = max(1e-6, 1.0 - top_fraction)
-            t = (raw_t - top_fraction) / denominator
-        row_color = tuple(
-            int(cloud_color[c] + (sky_color[c] - cloud_color[c]) * t)
-            for c in range(3)
-        )
-        gradient_rows.append(row_color)
+    gradient_rows = _build_gradient_rows(height, cloud_color, sky_color)
 
     frames: List[Image.Image] = []
     for frame_index in range(total_frames):
