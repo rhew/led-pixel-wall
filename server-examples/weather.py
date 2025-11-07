@@ -88,6 +88,10 @@ ICON_ANIMATIONS = {
         "day": "weather-backgrounds/snow-day.png",
         "night": "weather-backgrounds/snow-night.png",
     },
+    "sleet": {
+        "day": "weather-backgrounds/sleet-day.png",
+        "night": "weather-backgrounds/sleet-night.png",
+    },
     "fog": {
         "day": "weather-backgrounds/fog-day.png",
         "night": "weather-backgrounds/fog-night.png",
@@ -120,7 +124,7 @@ ICON_CODE_TO_KEY = {
     "tsra": "thunder",
     "tsra_sct": "thunder",
     "tsra_hi": "thunder",
-    "sleet": "snow",
+    "sleet": "sleet",
     "snow": "snow",
     "snow_sleet": "snow",
     "snow_fzra": "snow",
