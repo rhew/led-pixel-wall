@@ -145,13 +145,10 @@ def create_precipitation_png(
                         pixels[column, y] = blend
         frames.append(frame)
 
-    if with_lightning and frames:
-        lightning_frames = frames * THUNDER_LIGHTNING_FRAMES
-        mid = len(lightning_frames) // 2
-        flash_indices = [mid, min(mid + 1, len(lightning_frames) - 1)]
-        for idx in flash_indices:
-            lightning_frames[idx] = Image.new("RGB", (width, height), (255, 255, 255))
-        frames = lightning_frames
+    if with_lightning and frames and len(frames) > 1:
+        frames = frames * 3
+        frames[0] = Image.new("RGB", (width, height), (255, 255, 255))
+        frames[2] = Image.new("RGB", (width, height), (255, 255, 255))
 
     first, *rest = frames
     first.save(
