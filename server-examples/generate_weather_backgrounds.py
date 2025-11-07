@@ -42,8 +42,8 @@ FOG_FRAME_COUNT = 36
 FOG_FRAME_DURATION_MS = 120
 FOG_DAY_BASE = 150
 FOG_DAY_RANGE = 100
-FOG_NIGHT_BASE = 20
-FOG_NIGHT_RANGE = 90
+FOG_NIGHT_BASE = 5
+FOG_NIGHT_RANGE = 45
 
 
 def create_png(path: Path, width: int, height: int, color: tuple[int, int, int]) -> None:
