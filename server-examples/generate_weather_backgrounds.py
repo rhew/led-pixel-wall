@@ -27,6 +27,8 @@ NIGHT_COLOR = (0, 0, 0)         # Unlit / night
 RAIN_DROP_COLOR = (220, 240, 255)
 RAIN_TAIL_INTENSITY = (1.0, 0.65, 0.4, 0.2)
 RAIN_FRAME_DURATION_MS = 120
+PRECIP_DAY_CLOUD = (50, 50, 50)
+PRECIP_DAY_SKY = (50, 50, 200)
 SNOW_TAIL_INTENSITY = (1.0,)
 SNOW_FRAME_DURATION_MS = 270
 SLEET_TAIL_INTENSITY = (1.0,)
@@ -54,7 +56,8 @@ def create_percipitation_png(
     path: Path,
     width: int,
     height: int,
-    background: tuple[int, int, int],
+    cloud_color: tuple[int, int, int],
+    sky_color: tuple[int, int, int],
     tail_intensity: Iterable[float] = RAIN_TAIL_INTENSITY,
     frame_duration_ms: int = RAIN_FRAME_DURATION_MS,
     with_lightning: bool = False,
@@ -88,16 +91,39 @@ def create_percipitation_png(
 
     total_frames = schedule[-1][0] + drop_span
 
+    gradient_rows: List[Tuple[int, int, int]] = []
+    top_fraction = 0.3
+    for y in range(height):
+        if height == 1:
+            raw_t = 0.0
+        else:
+            raw_t = y / (height - 1)
+        if raw_t <= top_fraction:
+            t = 0.0
+        else:
+            denominator = max(1e-6, 1.0 - top_fraction)
+            t = (raw_t - top_fraction) / denominator
+        row_color = tuple(
+            int(cloud_color[c] + (sky_color[c] - cloud_color[c]) * t)
+            for c in range(3)
+        )
+        gradient_rows.append(row_color)
+
     frames: List[Image.Image] = []
     for frame_index in range(total_frames):
-        frame = Image.new("RGB", (width, height), background)
+        frame = Image.new("RGB", (width, height))
         pixels = frame.load()
+        for y in range(height):
+            row_color = gradient_rows[y]
+            for x in range(width):
+                pixels[x, y] = row_color
         for start, column in schedule:
             progress = frame_index - start
             if -len(tail_values) < progress < drop_span:
                 for tail_index, intensity in enumerate(tail_values):
                     y = progress - tail_index
                     if 0 <= column < width and 0 <= y < height:
+                        background = gradient_rows[y]
                         blend = tuple(
                             min(255, int(background[c] + (RAIN_DROP_COLOR[c] - background[c]) * intensity))
                             for c in range(3)
@@ -331,7 +357,8 @@ def main() -> None:
         rain_day_path,
         args.width,
         args.height,
-        DAY_COLOR,
+        PRECIP_DAY_CLOUD,
+        PRECIP_DAY_SKY,
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
     )
@@ -340,6 +367,7 @@ def main() -> None:
         args.width,
         args.height,
         NIGHT_COLOR,
+        NIGHT_COLOR,
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
     )
@@ -347,7 +375,8 @@ def main() -> None:
         snow_day_path,
         args.width,
         args.height,
-        DAY_COLOR,
+        PRECIP_DAY_CLOUD,
+        PRECIP_DAY_SKY,
         tail_intensity=SNOW_TAIL_INTENSITY,
         frame_duration_ms=SNOW_FRAME_DURATION_MS,
     )
@@ -356,6 +385,7 @@ def main() -> None:
         args.width,
         args.height,
         NIGHT_COLOR,
+        NIGHT_COLOR,
         tail_intensity=SNOW_TAIL_INTENSITY,
         frame_duration_ms=SNOW_FRAME_DURATION_MS,
     )
@@ -363,7 +393,8 @@ def main() -> None:
         sleet_day_path,
         args.width,
         args.height,
-        DAY_COLOR,
+        PRECIP_DAY_CLOUD,
+        PRECIP_DAY_SKY,
         tail_intensity=SLEET_TAIL_INTENSITY,
         frame_duration_ms=SLEET_FRAME_DURATION_MS,
     )
@@ -372,6 +403,7 @@ def main() -> None:
         args.width,
         args.height,
         NIGHT_COLOR,
+        NIGHT_COLOR,
         tail_intensity=SLEET_TAIL_INTENSITY,
         frame_duration_ms=SLEET_FRAME_DURATION_MS,
     )
@@ -379,7 +411,8 @@ def main() -> None:
         thunder_day_path,
         args.width,
         args.height,
-        DAY_COLOR,
+        PRECIP_DAY_CLOUD,
+        PRECIP_DAY_SKY,
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
         with_lightning=True,
@@ -388,6 +421,7 @@ def main() -> None:
         thunder_night_path,
         args.width,
         args.height,
+        NIGHT_COLOR,
         NIGHT_COLOR,
         tail_intensity=RAIN_TAIL_INTENSITY,
         frame_duration_ms=RAIN_FRAME_DURATION_MS,
