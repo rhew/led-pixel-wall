@@ -55,16 +55,10 @@ DIGITS_3x5 = {
 
 REQUEST_TIMEOUT = 10
 OBS_MAX_AGE_SECONDS = 3600  # fall back to forecast if observation is older than 60 minutes
-DAY_DIGIT_COLOR = (25, 25, 25)
-NIGHT_DIGIT_COLOR = (240, 240, 240)
+DAY_DIGIT_COLOR = (255, 220, 60)  # day digits
+NIGHT_DIGIT_COLOR = (200, 200, 200)
 FALLBACK_DAY_COLOR = (80, 120, 80)
 FALLBACK_NIGHT_COLOR = (0, 30, 0)
-CANDIDATE_DIGIT_COLORS = [
-    (245, 245, 245),
-    (220, 220, 220),
-    (40, 40, 40),
-    (15, 15, 15),
-]
 DEFAULT_ANIMATION_KEY = "clear"
 TEST_MODE_TEMPERATURE = 72
 ICON_ANIMATIONS = {
@@ -222,34 +216,6 @@ def _contrast_ratio(lum_a: float, lum_b: float) -> float:
     brighter = max(lum_a, lum_b)
     darker = min(lum_a, lum_b)
     return (brighter + 0.05) / (darker + 0.05)
-
-
-def _choose_digit_color(frames: List[List[Tuple[int, int, int]]]) -> Tuple[int, int, int]:
-    if not frames:
-        return NIGHT_DIGIT_COLOR
-
-    sample_indices = {0, len(frames) // 2, len(frames) - 1}
-    sample_luminance = [
-        _frame_average_luminance(frames[idx])
-        for idx in sorted(sample_indices)
-        if 0 <= idx < len(frames)
-    ]
-    if not sample_luminance:
-        sample_luminance = [_frame_average_luminance(frames[0])]
-
-    best_color = CANDIDATE_DIGIT_COLORS[0]
-    best_score = -1.0
-    for candidate in CANDIDATE_DIGIT_COLORS:
-        cand_lum = _relative_luminance(candidate)
-        score = (
-            sum(_contrast_ratio(cand_lum, background) for background in sample_luminance)
-            / len(sample_luminance)
-        )
-        if score > best_score:
-            best_score = score
-            best_color = candidate
-
-    return best_color
 
 
 def extract_icon_code(icon_url: Optional[str]) -> str:
@@ -496,7 +462,7 @@ def get_background_frames(
             continue
         try:
             frames, durations = load_background_frames(path)
-            digit_color = _choose_digit_color(frames)
+            digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
             FRAME_CACHE[cache_key] = (frames, durations, path, digit_color)
             return FRAME_CACHE[cache_key]
         except Exception as exc:
