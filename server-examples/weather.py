@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time as dtime
 
 from PIL import Image
 
@@ -35,6 +35,7 @@ FRAME_INTERVAL_SEC = 1.0
 CONTACT_EMAIL = "contact@example.com"
 USER_AGENT = f"led-pixel-wall-thermometer/1.0 ({CONTACT_EMAIL})"
 GEOCODER_URL = "https://nominatim.openstreetmap.org/search"
+SUN_API_URL = "https://api.sunrise-sunset.org/json"
 
 SERPENTINE = True
 
@@ -54,8 +55,8 @@ DIGITS_3x5 = {
 }
 
 REQUEST_TIMEOUT = 10
-OBS_MAX_AGE_SECONDS = 3600  # fall back to forecast if observation is older than 60 minutes
-DAY_DIGIT_COLOR = (255, 220, 60)  # day digits
+OBS_MAX_AGE_SECONDS = 3600
+DAY_DIGIT_COLOR = (255, 220, 60)
 NIGHT_DIGIT_COLOR = (200, 200, 200)
 FALLBACK_DAY_COLOR = (80, 120, 80)
 FALLBACK_NIGHT_COLOR = (0, 30, 0)
@@ -115,7 +116,7 @@ ICON_CODE_TO_KEY = {
     "rain": "rain",
     "rain_showers": "rain",
     "rain_showers_hi": "rain",
-    "rain_sleet": "rain",
+    "rain_sleet": "sleet",
     "rain_fzra": "rain",
     "rain_snow": "snow",
     "fzra": "rain",
@@ -140,7 +141,7 @@ FALLBACK_NIGHT_FRAME = [FALLBACK_NIGHT_COLOR] * (PANEL_WIDTH * PANEL_HEIGHT)
 FALLBACK_DURATIONS = [FRAME_INTERVAL_SEC]
 FRAME_CACHE: Dict[
     Tuple[str, bool],
-    Tuple[List[List[Tuple[int, int, int]]], List[float], str, Tuple[int, int, int]],
+    Tuple[List[List[Tuple[int, int, int]]], List[float], str],
 ] = {}
 
 
@@ -199,27 +200,32 @@ def _fetch_point_properties(lat: float, lon: float) -> dict:
     return _fetch_json(point_url).get("properties", {})
 
 
-def _relative_luminance(color: Tuple[int, int, int]) -> float:
-    def _channel(value: int) -> float:
-        normalized = value / 255.0
-        if normalized <= 0.03928:
-            return normalized / 12.92
-        return ((normalized + 0.055) / 1.055) ** 2.4
+def _fetch_sun_cycle(lat: float, lon: float, tzinfo) -> Tuple[datetime, datetime, float]:
+    url = f"{SUN_API_URL}?lat={lat:.4f}&lng={lon:.4f}&formatted=0"
+    data = _fetch_json(url)
+    results = data.get("results", {})
+    sunrise = _parse_iso_timestamp(results.get("sunrise", ""))
+    sunset = _parse_iso_timestamp(results.get("sunset", ""))
+    if not sunrise or not sunset:
+        raise RuntimeError("Sunrise/sunset data missing from API response")
+    sunrise_local = sunrise.astimezone(tzinfo)
+    sunset_local = sunset.astimezone(tzinfo)
+    local_now = datetime.now(tzinfo)
+    tomorrow = (local_now + timedelta(days=1)).date()
+    midnight_plus = datetime.combine(tomorrow, dtime(0, 0), tzinfo=tzinfo) + timedelta(seconds=1)
+    print(
+        "Sun cycle: "
+        f"sunrise={sunrise_local.isoformat()}, "
+        f"sunset={sunset_local.isoformat()} (local)"
+    )
+    return sunrise_local, sunset_local, midnight_plus.timestamp()
 
-    r, g, b = (_channel(color[0]), _channel(color[1]), _channel(color[2]))
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-
-def _frame_average_luminance(frame: List[Tuple[int, int, int]]) -> float:
-    if not frame:
-        return 0.0
-    return sum(_relative_luminance(pixel) for pixel in frame) / len(frame)
-
-
-def _contrast_ratio(lum_a: float, lum_b: float) -> float:
-    brighter = max(lum_a, lum_b)
-    darker = min(lum_a, lum_b)
-    return (brighter + 0.05) / (darker + 0.05)
+def _is_daytime(local_now: datetime, sunrise: datetime, sunset: datetime) -> bool:
+    if sunrise <= sunset:
+        return sunrise <= local_now < sunset
+    # Polar day/night fallback
+    return not (sunset <= local_now < sunrise)
 
 
 def extract_icon_code(icon_url: Optional[str]) -> str:
@@ -241,7 +247,7 @@ def animation_key_for_icon(icon_code: str) -> str:
     return ICON_CODE_TO_KEY.get(icon_code.lower(), DEFAULT_ANIMATION_KEY)
 
 
-def fetch_latest_observation(stations_url: str) -> Optional[int]:
+def fetch_latest_observation(stations_url: str) -> Tuple[Optional[int], Optional[str]]:
     stations = _fetch_json(stations_url)
     for feature in stations.get("features", []):
         station_id = feature.get("id")
@@ -286,57 +292,19 @@ def fetch_latest_observation(stations_url: str) -> Optional[int]:
             f"(age {int(age_seconds) if age_seconds is not None else 'unknown'}s,"
             f" station {station_id})"
         )
-        return int(round(temp_f))
+        icon_url = props.get("icon") or ""
+        icon_code = extract_icon_code(icon_url)
+        return int(round(temp_f)), icon_code
 
-    print("No fresh observations available; falling back to forecast.")
-    return None
+    print("No fresh observations available.")
+    return None, None
 
 
-def _extract_forecast_details(forecast_data: dict) -> Tuple[int, bool, str]:
-    periods = forecast_data.get("properties", {}).get("periods", [])
-    if not periods:
-        raise RuntimeError("No forecast periods returned")
-
-    period = periods[0]
-    temp = period.get("temperature")
-    unit = (period.get("temperatureUnit") or "F").upper()
+def fetch_observation_temp_and_icon(stations_url: str) -> Tuple[int, str]:
+    temp, icon_code = fetch_latest_observation(stations_url)
     if temp is None:
-        raise RuntimeError("Temperature missing from forecast period")
-
-    temp_f = float(temp)
-    if unit == "C":
-        temp_f = _c_to_f(temp_f)
-    is_daytime = bool(period.get("isDaytime", True))
-    icon_code = extract_icon_code(period.get("icon"))
-    value = int(round(temp_f))
-    print(f"Fetched NOAA temperature from forecast: {value}°F")
-    return value, is_daytime, icon_code
-
-
-def fetch_noaa_temperature(lat: float, lon: float) -> Tuple[int, bool, str]:
-    properties = _fetch_point_properties(lat, lon)
-    forecast_url = properties.get("forecastHourly") or properties.get("forecast")
-    if not forecast_url:
-        raise RuntimeError("No forecast or observation URL in point metadata")
-
-    stations_url = properties.get("observationStations")
-    forecast_data: Optional[dict] = None
-
-    if stations_url:
-        temp = fetch_latest_observation(stations_url)
-        if temp is not None:
-            try:
-                forecast_data = _fetch_json(forecast_url)
-                _, is_daytime, icon_code = _extract_forecast_details(forecast_data)
-            except Exception as exc:
-                print(f"Failed to determine day/night from forecast: {exc}")
-                is_daytime = True
-                icon_code = DEFAULT_ANIMATION_KEY
-            return temp, is_daytime, icon_code
-
-    if forecast_data is None:
-        forecast_data = _fetch_json(forecast_url)
-    return _extract_forecast_details(forecast_data)
+        raise RuntimeError("No fresh observations available")
+    return temp, icon_code or DEFAULT_ANIMATION_KEY
 
 
 def serpentine_index(x: int, y: int) -> int:
@@ -447,7 +415,7 @@ def load_background_frames(path: str) -> Tuple[List[List[Tuple[int, int, int]]],
 def get_background_frames(
     animation_key: str,
     is_daytime: bool,
-) -> Tuple[List[List[Tuple[int, int, int]]], List[float], str, Tuple[int, int, int]]:
+) -> Tuple[List[List[Tuple[int, int, int]]], List[float], str]:
     cache_key = (animation_key, is_daytime)
     if cache_key in FRAME_CACHE:
         return FRAME_CACHE[cache_key]
@@ -466,8 +434,7 @@ def get_background_frames(
             continue
         try:
             frames, durations = load_background_frames(path)
-            digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
-            FRAME_CACHE[cache_key] = (frames, durations, path, digit_color)
+            FRAME_CACHE[cache_key] = (frames, durations, path)
             return FRAME_CACHE[cache_key]
         except Exception as exc:
             print(f"Failed to load background '{path}': {exc}")
@@ -475,8 +442,7 @@ def get_background_frames(
     fallback_frames = [FALLBACK_DAY_FRAME] if is_daytime else [FALLBACK_NIGHT_FRAME]
     source = f"fallback-{variant}"
     print(f"Using fallback background for {variant} '{animation_key}'.")
-    fallback_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
-    FRAME_CACHE[cache_key] = (fallback_frames, FALLBACK_DURATIONS[:], source, fallback_color)
+    FRAME_CACHE[cache_key] = (fallback_frames, FALLBACK_DURATIONS[:], source)
     return FRAME_CACHE[cache_key]
 
 
@@ -503,27 +469,27 @@ def parse_args() -> argparse.Namespace:
 
 def run_background_test(args: argparse.Namespace) -> None:
     backgrounds: List[
-        Tuple[str, List[List[Tuple[int, int, int]]], List[float], Tuple[int, int, int]]
+        Tuple[str, List[List[Tuple[int, int, int]]], List[float], bool]
     ] = []
     for key, variants in ICON_ANIMATIONS.items():
         for is_day, variant_name in ((True, "day"), (False, "night")):
             if variant_name not in variants:
                 continue
-            frames, durations, source, digit_color = get_background_frames(key, is_day)
+            frames, durations, source = get_background_frames(key, is_day)
             label = f"{key}-{variant_name} ({source})"
-            backgrounds.append((label, frames, durations, digit_color))
+            backgrounds.append((label, frames, durations, is_day))
 
     backgrounds.append((
         "fallback-day",
         [FALLBACK_DAY_FRAME],
         FALLBACK_DURATIONS[:],
-        DAY_DIGIT_COLOR,
+        True,
     ))
     backgrounds.append((
         "fallback-night",
         [FALLBACK_NIGHT_FRAME],
         FALLBACK_DURATIONS[:],
-        NIGHT_DIGIT_COLOR,
+        False,
     ))
 
     if not backgrounds:
@@ -535,7 +501,8 @@ def run_background_test(args: argparse.Namespace) -> None:
     print("Entering background test mode. Press Ctrl-C to stop.")
     try:
         while True:
-            for label, frames, durations, digit_color in backgrounds:
+            for label, frames, durations, is_day in backgrounds:
+                digit_color = DAY_DIGIT_COLOR if is_day else NIGHT_DIGIT_COLOR
                 print(f"Displaying '{label}' with digit color {digit_color}")
                 cycle_duration = sum(durations) if durations else FRAME_INTERVAL_SEC * len(frames)
                 min_duration = max(3.0, 2.0 * cycle_duration)
@@ -570,20 +537,10 @@ def run_weather_display(args: argparse.Namespace) -> None:
     sequence = 0
     last_fetch = 0.0
     current_temp: Optional[int] = None
-    is_daytime: bool = False
     icon_key = DEFAULT_ANIMATION_KEY
     error_state = False
     frame_index = 0
-    (
-        background_frames,
-        frame_durations,
-        background_source,
-        recommended_color,
-    ) = get_background_frames(icon_key, is_daytime)
-    current_digit_color = recommended_color
-    current_background_key = icon_key
-    current_background_daytime = is_daytime
-    current_background_source = background_source
+    local_tz = datetime.now().astimezone().tzinfo
 
     try:
         lat, lon = geocode_location(LOCATION_QUERY)
@@ -591,13 +548,42 @@ def run_weather_display(args: argparse.Namespace) -> None:
     except Exception as exc:
         raise SystemExit(f"Failed to geocode '{LOCATION_QUERY}': {exc}")
 
+    properties = _fetch_point_properties(lat, lon)
+    stations_url = properties.get("observationStations")
+    if not stations_url:
+        raise SystemExit("Point metadata missing observation stations URL")
+
+    try:
+        sunrise_local, sunset_local, sun_refresh_ts = _fetch_sun_cycle(lat, lon, local_tz)
+    except Exception as exc:
+        raise SystemExit(f"Failed to fetch sunrise/sunset data: {exc}")
+
+    initial_daytime = _is_daytime(datetime.now(local_tz), sunrise_local, sunset_local)
+    (
+        background_frames,
+        frame_durations,
+        background_source,
+    ) = get_background_frames(icon_key, initial_daytime)
+    current_digit_color = DAY_DIGIT_COLOR if initial_daytime else NIGHT_DIGIT_COLOR
+    current_background_key = icon_key
+    current_background_daytime = initial_daytime
+    current_background_source = background_source
+
     try:
         while True:
-            now = time.time()
-            should_fetch = current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC
-            if should_fetch:
+            now_local = datetime.now(local_tz)
+            if time.time() >= sun_refresh_ts:
                 try:
-                    current_temp, is_daytime, icon_code = fetch_noaa_temperature(lat, lon)
+                    sunrise_local, sunset_local, sun_refresh_ts = _fetch_sun_cycle(lat, lon, local_tz)
+                except Exception as exc:
+                    print(f"Failed to refresh sunrise/sunset data: {exc}")
+                    sun_refresh_ts = time.time() + 3600
+            is_daytime = _is_daytime(now_local, sunrise_local, sunset_local)
+
+            now = time.time()
+            if current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC:
+                try:
+                    current_temp, icon_code = fetch_observation_temp_and_icon(stations_url)
                     last_fetch = now
                     print(
                         "Fetched NOAA temperature: "
@@ -612,17 +598,14 @@ def run_weather_display(args: argparse.Namespace) -> None:
                             background_frames,
                             frame_durations,
                             background_source,
-                            recommended_color,
                         ) = get_background_frames(icon_key, is_daytime)
                         current_background_key = icon_key
                         current_background_daytime = is_daytime
                         current_background_source = background_source
-                        current_digit_color = recommended_color
+                        current_digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
                         frame_index = 0
                     else:
-                        cached_entry = FRAME_CACHE.get((icon_key, is_daytime))
-                        if cached_entry:
-                            current_digit_color = cached_entry[3]
+                        current_digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
                     print(
                         "Forecast state: "
                         f"{'day' if is_daytime else 'night'}, "
@@ -651,7 +634,7 @@ def run_weather_display(args: argparse.Namespace) -> None:
             sleep_duration = min(RETRY_INTERVAL_SEC, duration) if error_state else duration
             time.sleep(max(sleep_duration, 0.01))
     except KeyboardInterrupt:
-        print("Stopping temperature demo.")
+        print("Stopping weather display.")
     finally:
         sock.close()
 
