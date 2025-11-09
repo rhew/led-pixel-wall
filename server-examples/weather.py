@@ -14,6 +14,7 @@ import socket
 import time
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone, timedelta, time as dtime
 
@@ -143,6 +144,53 @@ FRAME_CACHE: Dict[
     Tuple[str, bool],
     Tuple[List[List[Tuple[int, int, int]]], List[float], str],
 ] = {}
+
+
+@dataclass
+class DisplayState:
+    frames: List[List[Tuple[int, int, int]]]
+    durations: List[float]
+    frame_index: int
+    digit_color: Tuple[int, int, int]
+    background_key: str
+    background_source: str
+    is_day: bool
+
+    def next_duration(self) -> float:
+        if not self.durations:
+            return FRAME_INTERVAL_SEC
+        return self.durations[self.frame_index % len(self.durations)]
+
+    def advance_frame(self) -> None:
+        if self.frames:
+            self.frame_index = (self.frame_index + 1) % len(self.frames)
+
+
+class SunTracker:
+    def __init__(self, lat: float, lon: float, tzinfo):
+        self.lat = lat
+        self.lon = lon
+        self.tzinfo = tzinfo
+        self.sunrise = datetime.now(tzinfo)
+        self.sunset = datetime.now(tzinfo)
+        self.refresh_ts = 0.0
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.sunrise, self.sunset, self.refresh_ts = _fetch_sun_cycle(
+            self.lat, self.lon, self.tzinfo
+        )
+
+    def update_if_needed(self) -> None:
+        if time.time() >= self.refresh_ts:
+            try:
+                self.refresh()
+            except Exception as exc:
+                print(f"Failed to refresh sunrise/sunset data: {exc}")
+                self.refresh_ts = time.time() + 3600
+
+    def is_day(self) -> bool:
+        return _is_daytime(datetime.now(self.tzinfo), self.sunrise, self.sunset)
 
 
 def _fetch_json(url: str, headers: dict | None = None) -> dict:
@@ -446,6 +494,51 @@ def get_background_frames(
     return FRAME_CACHE[cache_key]
 
 
+def build_display_state(icon_key: str, is_daytime: bool) -> DisplayState:
+    frames, durations, source = get_background_frames(icon_key, is_daytime)
+    digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
+    return DisplayState(
+        frames=frames,
+        durations=durations,
+        frame_index=0,
+        digit_color=digit_color,
+        background_key=icon_key,
+        background_source=source,
+        is_day=is_daytime,
+    )
+
+
+def update_display_state(state: DisplayState, icon_key: str, is_daytime: bool) -> None:
+    needs_background = (
+        icon_key != state.background_key or is_daytime != state.is_day
+    )
+    if needs_background:
+        frames, durations, source = get_background_frames(icon_key, is_daytime)
+        state.frames = frames
+        state.durations = durations
+        state.background_source = source
+        state.background_key = icon_key
+        state.is_day = is_daytime
+        state.frame_index = 0
+    state.digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
+
+
+def build_frame_pixels(
+    frame_pixels: List[Tuple[int, int, int]],
+    digit_color: Tuple[int, int, int],
+    current_temp: Optional[int],
+    error_state: bool,
+) -> List[Tuple[int, int, int]]:
+    if current_temp is not None:
+        frame = render_temperature(current_temp, frame_pixels, digit_color)
+    else:
+        frame = frame_pixels
+    if error_state:
+        idx = serpentine_index(0, 0)
+        frame[idx] = (255, 0, 0)
+    return frame
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LED wall weather display")
     parser.add_argument(
@@ -539,7 +632,6 @@ def run_weather_display(args: argparse.Namespace) -> None:
     current_temp: Optional[int] = None
     icon_key = DEFAULT_ANIMATION_KEY
     error_state = False
-    frame_index = 0
     local_tz = datetime.now().astimezone().tzinfo
 
     try:
@@ -553,84 +645,43 @@ def run_weather_display(args: argparse.Namespace) -> None:
     if not stations_url:
         raise SystemExit("Point metadata missing observation stations URL")
 
-    try:
-        sunrise_local, sunset_local, sun_refresh_ts = _fetch_sun_cycle(lat, lon, local_tz)
-    except Exception as exc:
-        raise SystemExit(f"Failed to fetch sunrise/sunset data: {exc}")
-
-    initial_daytime = _is_daytime(datetime.now(local_tz), sunrise_local, sunset_local)
-    (
-        background_frames,
-        frame_durations,
-        background_source,
-    ) = get_background_frames(icon_key, initial_daytime)
-    current_digit_color = DAY_DIGIT_COLOR if initial_daytime else NIGHT_DIGIT_COLOR
-    current_background_key = icon_key
-    current_background_daytime = initial_daytime
-    current_background_source = background_source
+    sun_tracker = SunTracker(lat, lon, local_tz)
+    state = build_display_state(icon_key, sun_tracker.is_day())
 
     try:
         while True:
-            now_local = datetime.now(local_tz)
-            if time.time() >= sun_refresh_ts:
-                try:
-                    sunrise_local, sunset_local, sun_refresh_ts = _fetch_sun_cycle(lat, lon, local_tz)
-                except Exception as exc:
-                    print(f"Failed to refresh sunrise/sunset data: {exc}")
-                    sun_refresh_ts = time.time() + 3600
-            is_daytime = _is_daytime(now_local, sunrise_local, sunset_local)
+            sun_tracker.update_if_needed()
 
             now = time.time()
             if current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC:
                 try:
                     current_temp, icon_code = fetch_observation_temp_and_icon(stations_url)
                     last_fetch = now
+                    update_display_state(
+                        state,
+                        animation_key_for_icon(icon_code),
+                        sun_tracker.is_day)
                     print(
                         "Fetched NOAA temperature: "
                         f"{current_temp}°F "
-                        f"({'day' if is_daytime else 'night'})"
-                    )
-                    icon_key = animation_key_for_icon(icon_code)
-                    background_changed = icon_key != current_background_key
-                    day_state_changed = is_daytime != current_background_daytime
-                    if background_changed or day_state_changed:
-                        (
-                            background_frames,
-                            frame_durations,
-                            background_source,
-                        ) = get_background_frames(icon_key, is_daytime)
-                        current_background_key = icon_key
-                        current_background_daytime = is_daytime
-                        current_background_source = background_source
-                        current_digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
-                        frame_index = 0
-                    else:
-                        current_digit_color = DAY_DIGIT_COLOR if is_daytime else NIGHT_DIGIT_COLOR
-                    print(
-                        "Forecast state: "
-                        f"{'day' if is_daytime else 'night'}, "
-                        f"icon='{icon_code}', animation='{current_background_source}'"
+                        f"({'day' if sun_tracker.is_day() else 'night'}) "
+                        f"icon='{icon_code}', animation='{state.background_source}'"
                     )
                     error_state = False
                 except Exception as exc:
                     print(f"NOAA fetch failed: {exc}")
                     last_fetch = now - (FETCH_INTERVAL_SEC - RETRY_INTERVAL_SEC)
                     error_state = True
-            base_pixels = background_frames[frame_index]
-            if current_temp is not None:
-                frame = render_temperature(current_temp, base_pixels, current_digit_color)
-            else:
-                frame = base_pixels[:]
-            if error_state:
-                idx = serpentine_index(0, 0)
-                frame[idx] = (255, 0, 0)
-            payload = pixels_to_bytes(frame)
-
+            payload = pixels_to_bytes(build_frame_pixels(
+                state.frames[state.frame_index][:],
+                state.digit_color,
+                current_temp,
+                error_state))
             packet = build_ddp_packet(sequence, payload)
             sock.sendto(packet, (controller_ip, controller_port))
             sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
-            duration = frame_durations[frame_index]
-            frame_index = (frame_index + 1) % len(background_frames)
+            duration = state.next_duration()
+            state.advance_frame()
             sleep_duration = min(RETRY_INTERVAL_SEC, duration) if error_state else duration
             time.sleep(max(sleep_duration, 0.01))
     except KeyboardInterrupt:
