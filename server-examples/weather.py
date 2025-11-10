@@ -651,20 +651,20 @@ def run_weather_display(args: argparse.Namespace) -> None:
     try:
         while True:
             sun_tracker.update_if_needed()
+            is_daytime = sun_tracker.is_day()
+            update_display_state(state, state.background_key, is_daytime)
 
             now = time.time()
             if current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC:
                 try:
                     current_temp, icon_code = fetch_observation_temp_and_icon(stations_url)
                     last_fetch = now
-                    update_display_state(
-                        state,
-                        animation_key_for_icon(icon_code),
-                        sun_tracker.is_day)
+                    icon_key = animation_key_for_icon(icon_code)
+                    update_display_state(state, icon_key, is_daytime)
                     print(
                         "Fetched NOAA temperature: "
                         f"{current_temp}°F "
-                        f"({'day' if sun_tracker.is_day() else 'night'}) "
+                        f"({'day' if is_daytime else 'night'}) "
                         f"icon='{icon_code}', animation='{state.background_source}'"
                     )
                     error_state = False
