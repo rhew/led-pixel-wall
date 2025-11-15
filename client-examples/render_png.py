@@ -16,11 +16,7 @@ import tty
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
-try:
-    from PIL import Image
-except ImportError as exc:
-    print("This script requires Pillow. Install with 'pip install Pillow'.", file=sys.stderr)
-    raise SystemExit(exc) from exc
+from PIL import Image
 
 CONTROLLER_IP = "192.168.86.32"
 CONTROLLER_PORT = 4048
