@@ -38,6 +38,7 @@ typedef struct {
     char ssid[33];
     char pass[65];
     bool attempting_sta;
+    bool sta_connected;
     esp_timer_handle_t error_timer;
     esp_timer_handle_t connect_timer;
     httpd_handle_t httpd;
@@ -140,12 +141,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_i
     case WIFI_EVENT_STA_DISCONNECTED: {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)data;
         ESP_LOGW(TAG, "STA disconnected (reason=%d)", disc ? disc->reason : -1);
+        s_state.sta_connected = false;
         if (s_state.attempting_sta) {
             s_state.attempting_sta = false;
             set_portal_message("Connection failed. Check your SSID or password and try again.");
             wifi_clear_credentials();
             begin_error_feedback();
             start_softap(false);
+        } else if (s_state.has_creds) {
+            ESP_LOGI(TAG, "Reconnecting to Wi-Fi");
+            notify_status(WIFI_PROVISIONING_STATUS_CONNECTING, NULL);
+            esp_wifi_connect();
         }
         break;
     }
@@ -158,6 +164,7 @@ static void ip_event_handler(void *arg, esp_event_base_t base, int32_t event_id,
     if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ESP_LOGI(TAG, "Got IP");
         s_state.attempting_sta = false;
+        s_state.sta_connected = true;
         stop_http_server();
         notify_status(WIFI_PROVISIONING_STATUS_CONNECTED, NULL);
         if (s_state.connect_timer) {
