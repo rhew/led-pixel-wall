@@ -16,9 +16,10 @@ def _fetch_sun_cycle(lat: float, lon: float, tzinfo) -> Tuple[datetime, datetime
         raise RuntimeError("Sunrise/sunset data missing from API response")
     sunrise_local = sunrise.astimezone(tzinfo)
     sunset_local = sunset.astimezone(tzinfo)
-    local_now = datetime.now(tzinfo)
-    tomorrow = (local_now + timedelta(days=1)).date()
-    midnight_plus = datetime.combine(tomorrow, dtime(0, 0), tzinfo=tzinfo) + timedelta(seconds=1)
+    # Refresh after the day these times apply to has rolled over so we always fetch
+    # a new cycle instead of re-fetching the same date.
+    next_refresh_date = sunrise_local.date() + timedelta(days=1)
+    midnight_plus = datetime.combine(next_refresh_date, dtime(0, 0), tzinfo=tzinfo) + timedelta(seconds=1)
     print(
         "Sun cycle: "
         f"sunrise={sunrise_local.isoformat()}, "
@@ -49,12 +50,18 @@ class SunTracker:
         )
 
     def update_if_needed(self) -> None:
-        if datetime.now(self.tzinfo).timestamp() >= self.refresh_ts:
+        now = datetime.now(self.tzinfo)
+        if now.timestamp() >= self.refresh_ts:
             try:
                 self.refresh()
             except Exception as exc:
                 print(f"Failed to refresh sunrise/sunset data: {exc}")
-                self.refresh_ts = datetime.now(self.tzinfo).timestamp() + 3600
+                # Fall forward one day so we don't get stuck on the previous night's
+                # times if the API is unavailable at midnight.
+                if now.date() > self.sunrise.date():
+                    self.sunrise += timedelta(days=1)
+                    self.sunset += timedelta(days=1)
+                self.refresh_ts = now.timestamp() + 3600
 
     def is_day(self) -> bool:
         return _is_daytime(datetime.now(self.tzinfo), self.sunrise, self.sunset)
