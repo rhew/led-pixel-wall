@@ -7,6 +7,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 
 #define APP_LED_GPIO 3
 
@@ -14,6 +15,18 @@ static const char *TAG = "app";
 
 static controller_config_t s_config;
 static esp_timer_handle_t s_ddp_start_timer;
+
+static void init_nvs_flash_storage(void) {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
+}
 
 static void stop_ddp_if_running(void) {
     if (ddp_server_is_running()) {
@@ -126,6 +139,8 @@ static void provisioning_status_cb(wifi_provisioning_status_t status,
 }
 
 void app_main(void) {
+    init_nvs_flash_storage();
+
     controller_config_get_defaults(&s_config);
     esp_err_t cfg_err = controller_config_load(&s_config);
     if (cfg_err != ESP_OK) {

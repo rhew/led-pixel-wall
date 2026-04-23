@@ -632,7 +632,10 @@ esp_err_t wifi_provisioning_start(const wifi_provisioning_config_t *config) {
         esp_err_t ret = nvs_flash_init();
         if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
             ESP_ERROR_CHECK(nvs_flash_erase());
-            ESP_ERROR_CHECK(nvs_flash_init());
+            ret = nvs_flash_init();
+        }
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+            ESP_ERROR_CHECK(ret);
         }
         ESP_ERROR_CHECK(esp_netif_init());
         esp_err_t loop = esp_event_loop_create_default();
