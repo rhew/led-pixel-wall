@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal DDP client that paints the LED Pixel Wall solid blue.
 
-Assumes the controller is reachable at 192.168.86.32 and provisioned for 50 LEDs.
+Assumes the controller is reachable at 192.168.86.32 and provisioned for 100 LEDs.
 """
 
 import socket
@@ -9,7 +9,7 @@ import struct
 
 CONTROLLER_IP = "192.168.86.32"
 CONTROLLER_PORT = 4048
-LED_COUNT = 50
+LED_COUNT = 100
 
 
 def build_ddp_packet(sequence: int, rgb_bytes: bytes) -> bytes:

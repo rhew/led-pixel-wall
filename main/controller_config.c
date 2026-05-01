@@ -9,7 +9,7 @@
 #define KEY_LED_COUNT "led_count"
 #define KEY_DDP_PORT "ddp_port"
 
-#define DEFAULT_LED_COUNT 50
+#define DEFAULT_LED_COUNT 100
 #define DEFAULT_DDP_PORT 4048
 
 void controller_config_get_defaults(controller_config_t *out) {

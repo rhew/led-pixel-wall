@@ -45,7 +45,7 @@ static void start_ddp_with_current_config(void) {
     }
 
     if (latest.led_count == 0) {
-        latest.led_count = s_config.led_count ? s_config.led_count : 50;
+        latest.led_count = s_config.led_count ? s_config.led_count : 100;
     }
 
     bool led_count_changed = (latest.led_count != s_config.led_count);
@@ -147,7 +147,7 @@ void app_main(void) {
         ESP_LOGW(TAG, "Using default controller config: %s", esp_err_to_name(cfg_err));
     }
     if (s_config.led_count == 0) {
-        s_config.led_count = 50;
+        s_config.led_count = 100;
     }
     if (s_config.ddp_port == 0) {
         s_config.ddp_port = 4048;

@@ -15,7 +15,7 @@ ENV PATH="/opt/venv/bin:${PATH}"
 COPY client-examples/generate_weather_backgrounds.py /app/generate_weather_backgrounds.py
 
 RUN pip install --no-cache-dir pillow \
-    && python generate_weather_backgrounds.py --width 10 --height 5 --output-dir weather-backgrounds
+    && python generate_weather_backgrounds.py --width 10 --height 10 --output-dir weather-backgrounds
 
 FROM python:3.11-slim
 

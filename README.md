@@ -4,7 +4,7 @@ Control a wall of pixels. Tested with:
 
     - TinyS3 ESP32-S3 microcontroller
     - WS2811 LEDs
-    - LED panel with a 5×10 serpentine layout starting at the bottom-left corner
+    - LED panel with a 10×10 serpentine layout starting at the bottom-left corner
 
 Components:
 
@@ -23,9 +23,9 @@ No WLED version supports the TinyS3 as of Oct 27, 2025. See WLED.md.
 
 ### Configure
 
-Use the following in `main/app.c` to configure:
+Use the following in `main/app.c` to configure the GPIO pin for WS2811 data:
 
-    #define LED_STRIP_GPIO      3       // GPIO for WS2811 data
+    #define APP_LED_GPIO 3
 
 ### Prepare
 

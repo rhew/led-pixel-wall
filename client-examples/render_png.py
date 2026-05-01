@@ -18,7 +18,7 @@ from typing import Iterable, List, Sequence, Tuple
 
 from PIL import Image
 
-CONTROLLER_IP = "192.168.86.32"
+CONTROLLER_IP = "192.168.86.28"
 CONTROLLER_PORT = 4048
 DDP_SEQUENCE_MAX = 255
 DISPLAY_SECONDS = 5.0
@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render PNGs to the LED panel via DDP.")
     parser.add_argument("path", help="PNG file or directory of PNG files.")
     parser.add_argument("--width", type=int, default=10, help="Panel width in pixels (default: 10).")
-    parser.add_argument("--height", type=int, default=5, help="Panel height in pixels (default: 5).")
+    parser.add_argument("--height", type=int, default=10, help="Panel height in pixels (default: 5).")
     parser.add_argument("--ip", default=CONTROLLER_IP, help="Controller IP address.")
     parser.add_argument("--port", type=int, default=CONTROLLER_PORT, help="Controller DDP port.")
     parser.add_argument("--seconds", type=float, default=DISPLAY_SECONDS, help="Display duration per image.")

@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
 PANEL_WIDTH = 10
-PANEL_HEIGHT = 5
+PANEL_HEIGHT = 10
 SERPENTINE = True
 FRAME_INTERVAL_SEC = 1.0
 DEFAULT_ANIMATION_KEY = "clear"
@@ -223,6 +223,8 @@ def render_temperature(
         total_width = sum(glyph_widths) + (len(glyphs) - 1) * spacing
 
     start_x = max(((PANEL_WIDTH - total_width) + 1) // 2, 0)
+    glyph_height = len(glyphs[0]) if glyphs else 0
+    start_y = max((PANEL_HEIGHT - glyph_height + 1) // 2, 0)
 
     x = start_x
     for glyph, width in zip(glyphs, glyph_widths):
@@ -230,8 +232,9 @@ def render_temperature(
             for dx, bit in enumerate(row):
                 if bit == "1":
                     px = x + dx
-                    if 0 <= px < PANEL_WIDTH and 0 <= y < PANEL_HEIGHT:
-                        idx = serpentine_index(px, y)
+                    py = start_y + y
+                    if 0 <= px < PANEL_WIDTH and 0 <= py < PANEL_HEIGHT:
+                        idx = serpentine_index(px, py)
                         pixels[idx] = digit_color
         x += width + spacing
 
