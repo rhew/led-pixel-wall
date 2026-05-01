@@ -119,8 +119,9 @@ def create_precipitation_png(
 
     drop_span = height
     tail_values = list(tail_intensity) or [1.0]
+    tail_span = max(len(tail_values) - 1, 0)
     schedule = _build_drop_schedule(width, drop_span)
-    total_frames = schedule[-1][0] + drop_span
+    total_frames = schedule[-1][0] + drop_span + tail_span
     gradient_rows = _build_gradient_rows(height, cloud_color, sky_color)
 
     frames: List[Image.Image] = []
@@ -133,7 +134,7 @@ def create_precipitation_png(
                 pixels[x, y] = row_color
         for start, column in schedule:
             progress = frame_index - start
-            if -len(tail_values) < progress < drop_span:
+            if -len(tail_values) < progress < (drop_span + tail_span):
                 for tail_index, intensity in enumerate(tail_values):
                     y = progress - tail_index
                     if 0 <= column < width and 0 <= y < height:
