@@ -8,7 +8,7 @@ import socket
 import time
 from typing import List, Optional, Tuple
 
-CONTROLLER_IP = "192.168.86.32"
+CONTROLLER_IP = "192.168.86.28"
 CONTROLLER_PORT = 4048
 PANEL_WIDTH = 10
 PANEL_HEIGHT = 10
@@ -366,10 +366,110 @@ class MouseChaseEffect:
         return pixels
 
 
+class PDP11Effect:
+    def __init__(self) -> None:
+        self.speed = 4.51
+        self.color = (255, 4, 0)
+        self.dim_color = (6, 0, 0)
+        self.fade_rate = 9.2
+        self.row_pixels = [
+            [(0.0, 0.0, 0.0) for _ in range(PANEL_WIDTH)]
+            for _ in range(PANEL_HEIGHT)
+        ]
+        self.row_states = [self._spawn_row(y, randomize_phase=True) for y in range(PANEL_HEIGHT)]
+
+    def _band_direction(self, y: int) -> int:
+        if PANEL_HEIGHT <= 2:
+            return -1
+
+        top_rows = max(1, round(PANEL_HEIGHT * 0.4))
+        bottom_rows = max(1, round(PANEL_HEIGHT * 0.2))
+        if top_rows + bottom_rows >= PANEL_HEIGHT:
+            top_rows = 1
+            bottom_rows = 1
+
+        middle_start = top_rows
+        middle_end = PANEL_HEIGHT - bottom_rows
+
+        if y < middle_start:
+            return -1
+        if y < middle_end:
+            return 1
+        return -1
+
+    def _spawn_row(self, y: int, randomize_phase: bool = False) -> dict:
+        direction = self._band_direction(y)
+        count = random.randint(2, 3)
+        spacing = PANEL_WIDTH / count
+        particles = []
+        speed_scale = random.uniform(0.82, 1.18)
+
+        for i in range(count):
+            base = i * spacing
+            offset = random.uniform(0.0, max(0.2, spacing - 0.15)) if randomize_phase else 0.0
+            position = base + offset
+            if direction < 0:
+                position = (PANEL_WIDTH - 1) - position
+            particles.append(position)
+
+        return {
+            "direction": direction,
+            "particles": particles,
+            "speed_scale": speed_scale,
+        }
+
+    def frame(self, dt: float, elapsed: float) -> List[Tuple[int, int, int]]:
+        decay = math.exp(-self.fade_rate * dt)
+
+        for y in range(PANEL_HEIGHT):
+            state = self.row_states[y]
+            direction = state["direction"]
+            speed = self.speed * state["speed_scale"]
+            updated_particles = []
+            faded_row = []
+
+            for r, g, b in self.row_pixels[y]:
+                faded_row.append((r * decay, g * decay, b * decay))
+            self.row_pixels[y] = faded_row
+
+            for position in state["particles"]:
+                position += direction * speed * dt
+                if direction < 0 and position < 0.0:
+                    position += PANEL_WIDTH
+                elif direction > 0 and position >= PANEL_WIDTH:
+                    position -= PANEL_WIDTH
+                updated_particles.append(position)
+
+                x = int(round(position)) % PANEL_WIDTH
+                distance = abs(x - position)
+                wrap_distance = PANEL_WIDTH - distance
+                distance = min(distance, wrap_distance)
+                bulb = max(0.0, 1.0 - (distance / 0.75))
+                intensity = bulb * bulb * (3.0 - 2.0 * bulb)
+                current = self.row_pixels[y][x]
+                self.row_pixels[y][x] = (
+                    min(255.0, current[0] + (self.dim_color[0] + (self.color[0] - self.dim_color[0]) * intensity)),
+                    min(255.0, current[1] + (self.dim_color[1] + (self.color[1] - self.dim_color[1]) * intensity)),
+                    min(255.0, current[2] + (self.dim_color[2] + (self.color[2] - self.dim_color[2]) * intensity)),
+                )
+
+            state["particles"] = updated_particles
+
+        pixels = [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
+        for y in range(PANEL_HEIGHT):
+            for x in range(PANEL_WIDTH):
+                idx = serpentine_index(x, y)
+                r, g, b = self.row_pixels[y][x]
+                pixels[idx] = (int(r), int(g), int(b))
+
+        return pixels
+
+
 EFFECTS = {
     "radar": (RadarEffect, 0.03),
     "heatwave": (HeatWaveEffect, 0.04),
     "mouse": (MouseChaseEffect, 0.05),
+    "pdp-11": (PDP11Effect, 0.05),
 }
 DEMO_DURATION_SECONDS = 30.0
 
