@@ -9,14 +9,14 @@ forecast API. A --test-backgrounds mode cycles through every animation.
 """
 
 import argparse
-import socket
 import time
 from datetime import datetime
 from typing import Optional
 
-from weatherlib import backgrounds, ddp, noaa, sun
+from wallclient import DdpClient, PanelConfig
+from weatherlib import backgrounds, noaa, sun
 
-CONTROLLER_IP = "192.168.86.32"
+CONTROLLER_IP = "192.168.86.28"
 CONTROLLER_PORT = 4048
 RETRY_INTERVAL_SEC = 60.0
 LOCATION_QUERY = "Cary, NC"
@@ -48,8 +48,7 @@ def parse_args() -> argparse.Namespace:
 def run_background_test(args: argparse.Namespace) -> None:
     backgrounds_to_show = backgrounds.iter_background_states_for_test()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sequence = 0
+    client = DdpClient(PanelConfig(controller_ip=args.controller_ip, controller_port=args.controller_port))
     print("Entering background test mode. Press Ctrl-C to stop.")
     try:
         while True:
@@ -61,10 +60,7 @@ def run_background_test(args: argparse.Namespace) -> None:
                 state.frame_index = 0
                 while True:
                     frame = backgrounds.build_frame_pixels(state, TEST_MODE_TEMPERATURE, False)
-                    payload = ddp.pixels_to_bytes(frame)
-                    packet = ddp.build_ddp_packet(sequence, payload)
-                    sock.sendto(packet, (args.controller_ip, args.controller_port))
-                    sequence = (sequence + 1) % (ddp.DDP_SEQUENCE_MAX + 1)
+                    client.send(frame)
                     duration = state.next_duration()
                     state.advance_frame()
                     time.sleep(max(duration, 0.01))
@@ -73,14 +69,13 @@ def run_background_test(args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         print("Background test stopped.")
     finally:
-        sock.close()
+        client.close()
 
 
 def run_weather_display(args: argparse.Namespace) -> None:
     controller_ip = args.controller_ip
     controller_port = args.controller_port
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sequence = 0
+    client = DdpClient(PanelConfig(controller_ip=controller_ip, controller_port=controller_port))
     last_fetch = 0.0
     current_temp: Optional[int] = None
     icon_key = backgrounds.DEFAULT_ANIMATION_KEY
@@ -125,10 +120,7 @@ def run_weather_display(args: argparse.Namespace) -> None:
                     error_state = True
 
             frame = backgrounds.build_frame_pixels(state, current_temp, error_state)
-            payload = ddp.pixels_to_bytes(frame)
-            packet = ddp.build_ddp_packet(sequence, payload)
-            sock.sendto(packet, (controller_ip, controller_port))
-            sequence = (sequence + 1) % (ddp.DDP_SEQUENCE_MAX + 1)
+            client.send(frame)
             duration = state.next_duration()
             state.advance_frame()
             sleep_duration = min(RETRY_INTERVAL_SEC, duration) if error_state else duration
@@ -136,7 +128,7 @@ def run_weather_display(args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         print("Stopping weather display.")
     finally:
-        sock.close()
+        client.close()
 
 
 def main() -> None:

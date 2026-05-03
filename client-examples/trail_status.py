@@ -2,62 +2,18 @@
 """Render local trail status to the LED wall."""
 
 import math
-import socket
 import time
 from typing import List, Tuple
 
 from trailstatuslib import fetch_tmtb_trail_statuses
+from wallclient import DdpClient, PANEL_HEIGHT, PANEL_WIDTH, PanelConfig
+from wallclient import blend_color, serpentine_index
 
-CONTROLLER_IP = "192.168.86.28"
-CONTROLLER_PORT = 4048
-PANEL_WIDTH = 10
-PANEL_HEIGHT = 10
-DDP_SEQUENCE_MAX = 255
-FRAME_INTERVAL = 0.1
 TRAIL_STATUS_REFRESH_SECONDS = 300.0
 TRAIL_STATUS_BLINK_HOURS = 2.0
 TRAIL_STATUS_DIM_HOURS = 24.0
 TRAIL_STATUS_NORMAL_BRIGHTNESS = 0.72
 TRAIL_STATUS_MIN_BRIGHTNESS = 0.18
-
-
-def serpentine_index(x: int, y: int) -> int:
-    hw_y = PANEL_HEIGHT - 1 - y
-    if hw_y % 2 == 0:
-        return hw_y * PANEL_WIDTH + x
-    return hw_y * PANEL_WIDTH + (PANEL_WIDTH - 1 - x)
-
-
-def pixels_to_bytes(pixels: List[Tuple[int, int, int]]) -> bytes:
-    buf = bytearray()
-    for r, g, b in pixels:
-        buf.extend((r & 0xFF, g & 0xFF, b & 0xFF))
-    return bytes(buf)
-
-
-def make_ddp_packet(sequence: int, pixels: List[Tuple[int, int, int]]) -> bytes:
-    payload = pixels_to_bytes(pixels)
-    return bytes([
-        0x41,
-        sequence & 0xFF,
-        0x01,
-        0x00,
-        0x00,
-        (len(payload) >> 8) & 0xFF,
-        len(payload) & 0xFF,
-        0x00,
-        0x00,
-        0x00,
-    ]) + payload
-
-
-def blend_color(color: Tuple[int, int, int], scale: float) -> Tuple[int, int, int]:
-    scale = max(0.0, min(1.0, scale))
-    return (
-        int(color[0] * scale),
-        int(color[1] * scale),
-        int(color[2] * scale),
-    )
 
 
 class TrailStatusDisplay:
@@ -149,27 +105,20 @@ class TrailStatusDisplay:
 
 
 def run() -> None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client = DdpClient(PanelConfig())
     display = TrailStatusDisplay()
-    sequence = 0
     start = time.perf_counter()
-    blank_pixels = [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
     try:
-        sock.sendto(make_ddp_packet(sequence, blank_pixels), (CONTROLLER_IP, CONTROLLER_PORT))
-        sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+        client.send_blank()
 
         while True:
             now = time.perf_counter()
             elapsed = now - start
-            sock.sendto(
-                make_ddp_packet(sequence, display.frame(elapsed)),
-                (CONTROLLER_IP, CONTROLLER_PORT),
-            )
-            sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+            client.send(display.frame(elapsed))
             spent = time.perf_counter() - now
-            time.sleep(max(0.0, FRAME_INTERVAL - spent))
+            time.sleep(max(0.0, client.config.frame_interval - spent))
     finally:
-        sock.close()
+        client.close()
 
 
 if __name__ == "__main__":

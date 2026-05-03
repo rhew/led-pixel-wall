@@ -8,7 +8,6 @@ Usage examples:
 """
 
 import argparse
-import socket
 import sys
 import termios
 import time
@@ -17,10 +16,10 @@ from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
 from PIL import Image
+from wallclient import DdpClient, PanelConfig, pixels_to_bytes, serpentine_index
 
 CONTROLLER_IP = "192.168.86.28"
 CONTROLLER_PORT = 4048
-DDP_SEQUENCE_MAX = 255
 DISPLAY_SECONDS = 5.0
 IMAGE_MODE = "RGB"
 MIN_FRAME_DURATION = 0.05  # seconds
@@ -81,14 +80,6 @@ def load_frames(path: Path) -> List[Tuple[int, int, List[Tuple[int, int, int]], 
     return frames
 
 
-def serpentine_index(width: int, height: int, x: int, y: int) -> int:
-    """Return the LED index for serpentine wiring starting from bottom-left."""
-    hw_y = height - 1 - y
-    if hw_y % 2 == 0:
-        return hw_y * width + x
-    return hw_y * width + (width - 1 - x)
-
-
 def reorder_pixels(width: int, height: int, pixels: Sequence[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
     """Reorder image pixels into serpentine panel order."""
     if len(pixels) != width * height:
@@ -97,32 +88,9 @@ def reorder_pixels(width: int, height: int, pixels: Sequence[Tuple[int, int, int
     for idx, (r, g, b) in enumerate(pixels):
         x = idx % width
         y = idx // width
-        ordered_idx = serpentine_index(width, height, x, y)
+        ordered_idx = serpentine_index(x, y, width, height)
         ordered[ordered_idx] = (r, g, b)
     return ordered
-
-
-def pixels_to_bytes(pixels: Sequence[Tuple[int, int, int]]) -> bytes:
-    buf = bytearray()
-    for r, g, b in pixels:
-        buf.extend((r & 0xFF, g & 0xFF, b & 0xFF))
-    return bytes(buf)
-
-
-def build_ddp_packet(sequence: int, payload: bytes) -> bytes:
-    header = bytes([
-        0x41,
-        sequence & 0xFF,
-        0x01,
-        0x00,
-        0x00,
-        (len(payload) >> 8) & 0xFF,
-        len(payload) & 0xFF,
-        0x00,
-        0x00,
-        0x00,
-    ])
-    return header + payload
 
 
 def iter_png_paths(target: Path) -> Iterable[Path]:
@@ -171,8 +139,12 @@ def main() -> None:
     if not paths:
         raise SystemExit("No PNG files found.")
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sequence = 0
+    client = DdpClient(PanelConfig(
+        width=args.width,
+        height=args.height,
+        controller_ip=args.ip,
+        controller_port=args.port,
+    ))
     quit_requested = False
     try:
         while True:
@@ -200,10 +172,7 @@ def main() -> None:
 
                 if len(prepared) == 1:
                     print(f"{path} -> static {width}x{height}")
-                    packet = build_ddp_packet(sequence, payloads[0])
-                    sock.sendto(packet, (args.ip, args.port))
-                    print(f"Displayed {path} (seq={sequence})")
-                    sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+                    client.send_payload(payloads[0])
                     if args.step:
                         key = read_key("Press Enter/right for next, 'q' to quit: ")
                         if key in ("QUIT", "ESC", "q", "Q"):
@@ -226,13 +195,11 @@ def main() -> None:
                                 f"({len(payloads)} frames)"
                             )
                         print(f"Displaying frame {args.frame}/{len(payloads)}")
-                        packet = build_ddp_packet(sequence, payloads[idx])
-                        sock.sendto(packet, (args.ip, args.port))
+                        client.send_payload(payloads[idx])
                         print(
                             f"  frame {args.frame}/{len(payloads)} "
                             f"duration {durations_raw[idx]:.3f}s"
                         )
-                        sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
                         if args.step:
                             key = read_key("Press Enter/right for next image, 'q' to quit: ")
                             if key in ("QUIT", "ESC", "q", "Q"):
@@ -248,9 +215,7 @@ def main() -> None:
                         key_lower = ""
                         while not quit_requested:
                             payload = payloads[frame_idx]
-                            packet = build_ddp_packet(sequence, payload)
-                            sock.sendto(packet, (args.ip, args.port))
-                            sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+                            client.send_payload(payload)
                             print(
                                 f"  frame {frame_idx + 1}/{len(payloads)} "
                                 f"duration {durations_raw[frame_idx]:.3f}s"
@@ -283,9 +248,7 @@ def main() -> None:
                         print(f"Playing animation {path} for {target_duration:.2f}s")
                         while elapsed < target_duration:
                             for payload, duration in zip(payloads, durations_clamped):
-                                packet = build_ddp_packet(sequence, payload)
-                                sock.sendto(packet, (args.ip, args.port))
-                                sequence = (sequence + 1) % (DDP_SEQUENCE_MAX + 1)
+                                client.send_payload(payload)
                                 time.sleep(duration)
                                 elapsed = time.monotonic() - start_time
                                 if elapsed >= target_duration:
@@ -297,7 +260,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("Stopping PNG renderer.")
     finally:
-        sock.close()
+        client.close()
 
 
 if __name__ == "__main__":

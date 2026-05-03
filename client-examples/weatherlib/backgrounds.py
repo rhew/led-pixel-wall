@@ -2,9 +2,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
+from wallclient import PANEL_HEIGHT, PANEL_WIDTH, serpentine_index
 
-PANEL_WIDTH = 10
-PANEL_HEIGHT = 10
 SERPENTINE = True
 FRAME_INTERVAL_SEC = 1.0
 DEFAULT_ANIMATION_KEY = "clear"
@@ -129,18 +128,6 @@ class DisplayState:
     def advance_frame(self) -> None:
         if self.frames:
             self.frame_index = (self.frame_index + 1) % len(self.frames)
-
-
-def serpentine_index(x: int, y: int) -> int:
-    hw_y = PANEL_HEIGHT - 1 - y
-    if SERPENTINE:
-        if hw_y % 2 == 0:
-            idx = hw_y * PANEL_WIDTH + x
-        else:
-            idx = hw_y * PANEL_WIDTH + (PANEL_WIDTH - 1 - x)
-    else:
-        idx = hw_y * PANEL_WIDTH + x
-    return idx
 
 
 def load_background_frames(path: str) -> Tuple[List[List[Tuple[int, int, int]]], List[float]]:

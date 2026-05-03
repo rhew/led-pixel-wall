@@ -34,6 +34,7 @@ COPY --from=builder /app/weather-backgrounds /app/weather-backgrounds
 ENV PATH="/opt/venv/bin:${PATH}"
 
 COPY client-examples/weather.py /app/weather.py
+COPY client-examples/wallclient /app/wallclient
 COPY client-examples/weatherlib /app/weatherlib
 
 ENTRYPOINT ["python", "-u", "weather.py"]

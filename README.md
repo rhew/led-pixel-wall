@@ -11,6 +11,7 @@ Components:
     - `main/app.c`: ESP32-S3 firmware that listens for DDP frames and drives a WS2811 strip
     - `client-examples/render_png.py`: client for rendering PNG/APNG images to the DDP server
     - `client-examples/weather.py`: NOAA weather display client and Docker packaging
+    - `client-examples/system_status.py`: local CPU and memory status client
     - `client-examples/trail_status.py`: TriangleMTB/Trailforks trail status client
 
 
@@ -78,4 +79,16 @@ It requires `cloudscraper`. Run:
 
 ```
 client-examples/venv/bin/python client-examples/trail_status.py
+```
+
+---
+
+## System status client
+
+`client-examples/system_status.py` renders local CPU usage and memory usage to the LED wall.
+
+Run:
+
+```
+python3 client-examples/system_status.py
 ```
