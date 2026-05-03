@@ -352,7 +352,7 @@ class PDP11Effect:
         self.speed = 4.51
         self.color = (255, 4, 0)
         self.dim_color = (6, 0, 0)
-        self.fade_rate = 9.2
+        self.fade_rate = 11
         self.row_pixels = [
             [(0.0, 0.0, 0.0) for _ in range(PANEL_WIDTH)]
             for _ in range(PANEL_HEIGHT)
@@ -494,8 +494,8 @@ def main() -> None:
     parser.add_argument(
         "--effect",
         choices=list(EFFECTS.keys()),
-        default="radar",
-        help="Which animation to play (default: radar).",
+        default="pdp-11",
+        help="Which animation to play (default: pdp-11).",
     )
     parser.add_argument(
         "--demo",
