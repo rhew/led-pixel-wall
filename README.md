@@ -11,6 +11,7 @@ Components:
     - `main/app.c`: ESP32-S3 firmware that listens for DDP frames and drives a WS2811 strip
     - `client-examples/render_png.py`: client for rendering PNG/APNG images to the DDP server
     - `client-examples/weather.py`: NOAA weather display client and Docker packaging
+    - `client-examples/trail_status.py`: TriangleMTB/Trailforks trail status client
 
 
 Why not WLED?
@@ -66,3 +67,15 @@ The root `Dockerfile` packages the NOAA weather client in `client-examples/weath
    ```
    docker run --rm --network host led-wall-weather --test-backgrounds
    ```
+
+---
+
+## Trail status client
+
+`client-examples/trail_status.py` renders TriangleMTB trail status to the wall using the TriangleMTB page plus Trailforks status widgets/pages.
+
+It requires `cloudscraper`. Run:
+
+```
+client-examples/venv/bin/python client-examples/trail_status.py
+```
