@@ -59,7 +59,7 @@ def run_background_test(args: argparse.Namespace) -> None:
                 start_time = time.time()
                 state.frame_index = 0
                 while True:
-                    frame = backgrounds.build_frame_pixels(state, TEST_MODE_TEMPERATURE, False)
+                    frame = backgrounds.build_frame_pixels(state, TEST_MODE_TEMPERATURE, None)
                     client.send(frame)
                     duration = state.next_duration()
                     state.advance_frame()
@@ -79,7 +79,9 @@ def run_weather_display(args: argparse.Namespace) -> None:
     last_fetch = 0.0
     current_temp: Optional[int] = None
     icon_key = backgrounds.DEFAULT_ANIMATION_KEY
-    error_state = False
+    indicator_level: Optional[str] = None
+    overlay_text: Optional[str] = None
+    fetch_failed = False
 
     try:
         lat, lon = noaa.geocode_location(LOCATION_QUERY)
@@ -102,28 +104,47 @@ def run_weather_display(args: argparse.Namespace) -> None:
             backgrounds.update_display_state(state, state.background_key, is_daytime)
 
             now = time.time()
-            if current_temp is None or (now - last_fetch) >= FETCH_INTERVAL_SEC:
+            if (current_temp is None and overlay_text is None) or (now - last_fetch) >= FETCH_INTERVAL_SEC:
                 try:
-                    current_temp, icon_code = noaa.fetch_observation_temp_and_icon(stations_url)
+                    current_temp, icon_code, indicator_level = noaa.fetch_observation_temp_and_icon(stations_url)
                     last_fetch = now
-                    icon_key = backgrounds.animation_key_for_icon(icon_code)
-                    backgrounds.update_display_state(state, icon_key, is_daytime)
-                    print(
-                        "Fetched NOAA temperature: "
-                        f"{current_temp}°F ({'day' if is_daytime else 'night'}) "
-                        f"icon='{icon_code}', animation='{state.background_source}'"
-                    )
-                    error_state = False
+                    overlay_text = None
+                    if indicator_level == "red":
+                        current_temp = None
+                        indicator_level = None
+                        overlay_text = "??"
+                        icon_key = "fog"
+                        fetch_failed = True
+                        backgrounds.update_display_state(state, icon_key, is_daytime)
+                        print(
+                            "Using no-data display for stale observation: "
+                            f"icon='{icon_code}', age>=2h, animation='{state.background_source}'"
+                        )
+                    else:
+                        icon_key = backgrounds.animation_key_for_icon(icon_code)
+                        backgrounds.update_display_state(state, icon_key, is_daytime)
+                        print(
+                            "Fetched NOAA temperature: "
+                            f"{current_temp}°F ({'day' if is_daytime else 'night'}) "
+                            f"icon='{icon_code}', animation='{state.background_source}', "
+                            f"indicator='{indicator_level or 'none'}'"
+                        )
+                        fetch_failed = False
                 except Exception as exc:
                     print(f"NOAA fetch failed: {exc}")
                     last_fetch = now - (FETCH_INTERVAL_SEC - RETRY_INTERVAL_SEC)
-                    error_state = True
+                    current_temp = None
+                    overlay_text = "??"
+                    icon_key = "fog"
+                    indicator_level = None
+                    fetch_failed = True
+                    backgrounds.update_display_state(state, icon_key, is_daytime)
 
-            frame = backgrounds.build_frame_pixels(state, current_temp, error_state)
+            frame = backgrounds.build_frame_pixels(state, current_temp, indicator_level, overlay_text)
             client.send(frame)
             duration = state.next_duration()
             state.advance_frame()
-            sleep_duration = min(RETRY_INTERVAL_SEC, duration) if error_state else duration
+            sleep_duration = min(RETRY_INTERVAL_SEC, duration) if fetch_failed else duration
             time.sleep(max(sleep_duration, 0.01))
     except KeyboardInterrupt:
         print("Stopping weather display.")

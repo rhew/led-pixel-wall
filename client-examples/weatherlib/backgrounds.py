@@ -28,6 +28,7 @@ DIGITS_3x5 = {
     "8": ["111", "101", "111", "101", "111"],
     "9": ["111", "101", "111", "001", "111"],
     "-": ["00", "00", "11", "00", "00"],
+    "?": ["111", "001", "011", "000", "010"],
     " ": ["000", "000", "000", "000", "000"],
 }
 
@@ -193,14 +194,13 @@ def get_background_frames(
     return _FRAME_CACHE[cache_key]
 
 
-def render_temperature(
-    temp_f: int,
+def render_text(
+    text: str,
     base_pixels: List[Tuple[int, int, int]],
     digit_color: Tuple[int, int, int],
 ) -> List[Tuple[int, int, int]]:
     pixels = base_pixels[:]
-    temp_str = str(temp_f)
-    glyphs = [DIGITS_3x5.get(ch, DIGITS_3x5[" "]) for ch in temp_str]
+    glyphs = [DIGITS_3x5.get(ch, DIGITS_3x5[" "]) for ch in text]
     glyph_widths = [len(glyph[0]) if glyph else 0 for glyph in glyphs]
 
     spacing = 1
@@ -226,6 +226,14 @@ def render_temperature(
         x += width + spacing
 
     return pixels
+
+
+def render_temperature(
+    temp_f: int,
+    base_pixels: List[Tuple[int, int, int]],
+    digit_color: Tuple[int, int, int],
+) -> List[Tuple[int, int, int]]:
+    return render_text(str(temp_f), base_pixels, digit_color)
 
 
 def build_display_state(icon_key: str, is_daytime: bool) -> DisplayState:
@@ -260,16 +268,20 @@ def update_display_state(state: DisplayState, icon_key: str, is_daytime: bool) -
 def build_frame_pixels(
     state: DisplayState,
     current_temp: Optional[int],
-    error_state: bool,
+    indicator_level: Optional[str],
+    overlay_text: Optional[str] = None,
 ) -> List[Tuple[int, int, int]]:
     base_pixels = state.frames[state.frame_index][:]
-    if current_temp is not None:
+    if overlay_text:
+        frame = render_text(overlay_text, base_pixels, state.digit_color)
+    elif current_temp is not None:
         frame = render_temperature(current_temp, base_pixels, state.digit_color)
     else:
         frame = base_pixels
-    if error_state:
-        idx = serpentine_index(0, 0)
-        frame[idx] = (255, 0, 0)
+    if indicator_level == "yellow":
+        frame[serpentine_index(0, 0)] = (255, 180, 0)
+    elif indicator_level == "red":
+        frame[serpentine_index(0, 0)] = (255, 0, 0)
     return frame
 
 

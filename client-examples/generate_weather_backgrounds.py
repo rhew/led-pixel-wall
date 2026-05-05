@@ -12,7 +12,7 @@ Outputs the core asset set:
   - severe.png
 
 Usage:
-    ./generate_weather_backgrounds.py --width 10 --height 5 --output-dir assets/
+    ./generate_weather_backgrounds.py --width 10 --height 10 --output-dir assets/
 """
 
 import argparse
@@ -328,8 +328,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--height",
         type=int,
-        default=5,
-        help="Image height in pixels (default: 5).",
+        default=10,
+        help="Image height in pixels (default: 10).",
     )
     parser.add_argument(
         "--output-dir",
