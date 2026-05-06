@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LED Weather Background Viewer</title>
+  <style>
+    :root {
+      --bg: #d2d2d2;
+      --panel: #b4b4b4;
+      --cell-bg: #181818;
+      --grid: #464646;
+      --text: #111111;
+      --border: #000000;
+      --accent: #1d4ed8;
+      --scale: 40;
+      --frame-w: calc(__VIEWER_WIDTH__ * var(--scale));
+      --frame-h: calc(__VIEWER_HEIGHT__ * var(--scale));
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iosevka Aile", "IBM Plex Sans", sans-serif;
+      background:
+        radial-gradient(circle at top left, #f6f6f6 0, #d8d8d8 45%, #c4c4c4 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .app {
+      width: min(980px, 100%);
+      background: rgba(255, 255, 255, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.85);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(10px);
+      padding: 20px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    select, input {
+      font: inherit;
+      padding: 10px 12px;
+      border: 1px solid #9a9a9a;
+      background: rgba(255, 255, 255, 0.92);
+      min-width: 180px;
+    }
+    .stage {
+      display: grid;
+      gap: 12px;
+      justify-items: start;
+    }
+    .frame {
+      padding: 8px;
+      background: #000000;
+      border: 1px solid var(--border);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+    canvas {
+      display: block;
+      width: var(--frame-w);
+      height: var(--frame-h);
+      image-rendering: pixelated;
+      background: var(--cell-bg);
+    }
+    .meta {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      font-size: 13px;
+    }
+    .meta strong {
+      display: inline-block;
+      min-width: 82px;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="controls">
+      <label>
+        Asset
+        <select id="asset-select"></select>
+      </label>
+      <label>
+        Overlay
+        <input id="overlay-text" type="text" value="72" maxlength="4">
+      </label>
+    </div>
+    <section class="stage">
+      <div class="frame">
+        <canvas id="viewer" width="__VIEWER_CANVAS_WIDTH__" height="__VIEWER_CANVAS_HEIGHT__"></canvas>
+      </div>
+      <div class="meta">
+        <div><strong>Stored frames</strong><span id="frame-count"></span></div>
+        <div><strong>Frame</strong><span id="frame-index"></span></div>
+        <div><strong>Delay</strong><span id="frame-delay"></span></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const manifest = __VIEWER_MANIFEST__;
+    const scale = 40;
+    const canvas = document.getElementById("viewer");
+    const ctx = canvas.getContext("2d");
+    const assetSelect = document.getElementById("asset-select");
+    const overlayInput = document.getElementById("overlay-text");
+    const frameCountEl = document.getElementById("frame-count");
+    const frameIndexEl = document.getElementById("frame-index");
+    const frameDelayEl = document.getElementById("frame-delay");
+
+    const assetsByName = new Map(manifest.assets.map((asset) => [asset.name, asset]));
+    const glyphs = manifest.digitGlyphs;
+    let currentAsset = manifest.defaultAsset;
+    let frameIndex = 0;
+    let timerId = null;
+
+    function decodeFrame(hex) {
+      const pixels = [];
+      for (let i = 0; i < hex.length; i += 6) {
+        pixels.push([
+          parseInt(hex.slice(i, i + 2), 16),
+          parseInt(hex.slice(i + 2, i + 4), 16),
+          parseInt(hex.slice(i + 4, i + 6), 16),
+        ]);
+      }
+      return pixels;
+    }
+
+    function drawOverlay(pixels, text, digitColor) {
+      const normalized = (text || "").slice(0, 4).padEnd(1, " ");
+      const glyphList = Array.from(normalized).map((ch) => glyphs[ch] || glyphs[" "]);
+      const widths = glyphList.map((glyph) => glyph[0].length);
+      let spacing = 1;
+      let totalWidth = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, glyphList.length - 1) * spacing;
+      if (totalWidth > manifest.width) {
+        spacing = 0;
+        totalWidth = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, glyphList.length - 1) * spacing;
+      }
+      let x = Math.max(Math.floor((manifest.width - totalWidth + 1) / 2), 0);
+      const startY = Math.max(Math.floor((manifest.height - 5 + 1) / 2), 0);
+      for (let glyphIndex = 0; glyphIndex < glyphList.length; glyphIndex += 1) {
+        const glyph = glyphList[glyphIndex];
+        for (let gy = 0; gy < glyph.length; gy += 1) {
+          for (let gx = 0; gx < glyph[gy].length; gx += 1) {
+            if (glyph[gy][gx] !== "1") {
+              continue;
+            }
+            const px = x + gx;
+            const py = startY + gy;
+            if (px >= 0 && px < manifest.width && py >= 0 && py < manifest.height) {
+              pixels[py * manifest.width + px] = digitColor.slice();
+            }
+          }
+        }
+        x += widths[glyphIndex] + spacing;
+      }
+    }
+
+    function isDaytimeAsset(assetName) {
+      return assetName.includes("-day") || assetName === "clear-day.png";
+    }
+
+    function applyPhysicalPanelPreviewCompensation(pixel, assetName) {
+      if (!isDaytimeAsset(assetName)) {
+        return pixel;
+      }
+
+      const [r, g, b] = pixel;
+      const maxChannel = Math.max(r, g, b);
+      if (maxChannel >= 150) {
+        return pixel;
+      }
+
+      // Viewer-only compensation: on the real wall, dim daytime pixels sit
+      // behind a white diffuser and read lighter than flat browser squares.
+      const previewFloor = 132;
+      const previewMix = 0.75;
+      return [
+        Math.min(255, Math.round(r + (previewFloor - r) * previewMix)),
+        Math.min(255, Math.round(g + (previewFloor - g) * previewMix)),
+        Math.min(255, Math.round(b + (previewFloor - b) * previewMix)),
+      ];
+    }
+
+    function renderFrame() {
+      const asset = assetsByName.get(currentAsset);
+      if (!asset) {
+        return;
+      }
+      const pixels = decodeFrame(asset.frames[frameIndex]).map((pixel) => pixel.slice());
+      const overlayText = overlayInput.value.trim();
+      if (overlayText) {
+        drawOverlay(pixels, overlayText, asset.digitColor || [200, 200, 200]);
+      }
+
+      ctx.fillStyle = isDaytimeAsset(asset.name) ? "#d9d9d9" : "#181818";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let y = 0; y < manifest.height; y += 1) {
+        for (let x = 0; x < manifest.width; x += 1) {
+          const [r, g, b] = applyPhysicalPanelPreviewCompensation(
+            pixels[y * manifest.width + x],
+            asset.name,
+          );
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+        }
+      }
+
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= manifest.width; x += 1) {
+        const dx = x * scale + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(dx, 0);
+        ctx.lineTo(dx, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= manifest.height; y += 1) {
+        const dy = y * scale + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, dy);
+        ctx.lineTo(canvas.width, dy);
+        ctx.stroke();
+      }
+
+      frameCountEl.textContent = `${asset.frames.length}`;
+      frameIndexEl.textContent = `${frameIndex + 1} / ${asset.frames.length}`;
+      frameDelayEl.textContent = `${asset.durations[frameIndex]} ms`;
+    }
+
+    function scheduleNextFrame() {
+      const asset = assetsByName.get(currentAsset);
+      if (!asset) {
+        return;
+      }
+      renderFrame();
+      clearTimeout(timerId);
+      timerId = window.setTimeout(() => {
+        frameIndex = (frameIndex + 1) % asset.frames.length;
+        scheduleNextFrame();
+      }, asset.durations[frameIndex]);
+    }
+
+    function selectAsset(name) {
+      currentAsset = name;
+      frameIndex = 0;
+      scheduleNextFrame();
+    }
+
+    for (const asset of manifest.assets) {
+      const option = document.createElement("option");
+      option.value = asset.name;
+      option.textContent = asset.name;
+      if (asset.name === manifest.defaultAsset) {
+        option.selected = true;
+      }
+      assetSelect.appendChild(option);
+    }
+
+    assetSelect.addEventListener("change", (event) => selectAsset(event.target.value));
+    overlayInput.addEventListener("input", renderFrame);
+
+    selectAsset(manifest.defaultAsset);
+  </script>
+</body>
+</html>

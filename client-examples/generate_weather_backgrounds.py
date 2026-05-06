@@ -16,17 +16,20 @@ Usage:
 """
 
 import argparse
+import json
 import math
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
 from PIL import Image
+from weatherlib.display_assets import DAY_DIGIT_COLOR, DIGITS_3X5, NIGHT_DIGIT_COLOR
 
 DAY_COLOR = (0, 80, 255)
 NIGHT_COLOR = (0, 0, 0)
 RAIN_DROP_COLOR = (220, 240, 255)
 RAIN_TAIL_INTENSITY = (1.0, 0.65, 0.4, 0.2)
 RAIN_FRAME_DURATION_MS = 120
+STATIC_FRAME_DURATION_MS = 1000
 PRECIP_DAY_CLOUD = (50, 50, 50)
 CLOUD_DAY_SKY = (220, 220, 220)
 CLOUD_NIGHT_SKY = (60, 60, 60)
@@ -52,10 +55,77 @@ CLEAR_NIGHT_STAR_COLOR = (235, 235, 255)
 CLEAR_NIGHT_TAIL_INTENSITY = (1.0, 0.55, 0.25)
 
 
+def _frame_to_hex(frame: Image.Image) -> str:
+    return "".join(f"{r:02x}{g:02x}{b:02x}" for r, g, b in frame.convert("RGB").getdata())
+
+
+def _collect_viewer_assets(output_dir: Path, width: int, height: int) -> List[dict]:
+    assets: List[dict] = []
+    for path in sorted(output_dir.glob("*.png")):
+        image = Image.open(path)
+        frames: List[str] = []
+        durations: List[int] = []
+        try:
+            frame_count = getattr(image, "n_frames", 1)
+            for idx in range(frame_count):
+                image.seek(idx)
+                rgb = image.convert("RGB")
+                if rgb.size != (width, height):
+                    continue
+                frames.append(_frame_to_hex(rgb))
+                duration_ms = image.info.get("duration", STATIC_FRAME_DURATION_MS)
+                if frame_count == 1:
+                    duration_ms = STATIC_FRAME_DURATION_MS
+                durations.append(max(int(round(duration_ms)), 50))
+        finally:
+            image.close()
+
+        if not frames:
+            continue
+
+        digit_color = DAY_DIGIT_COLOR if "-day" in path.name or path.name == "clear-day.png" else NIGHT_DIGIT_COLOR
+        assets.append({
+            "name": path.name,
+            "frames": frames,
+            "durations": durations,
+            "digitColor": list(digit_color),
+        })
+    return assets
+
+
+def _build_viewer_manifest(width: int, height: int, assets: List[dict]) -> dict:
+    default_asset = "clear-night.png"
+    if not any(asset["name"] == default_asset for asset in assets) and assets:
+        default_asset = assets[0]["name"]
+
+    return {
+        "width": width,
+        "height": height,
+        "defaultAsset": default_asset,
+        "digitGlyphs": DIGITS_3X5,
+        "assets": assets,
+    }
+
+
 def create_png(path: Path, width: int, height: int, color: tuple[int, int, int]) -> None:
     """Create a solid-color PNG at the given path."""
     image = Image.new("RGB", (width, height), color)
     image.save(path, format="PNG")
+
+
+def write_viewer_html(output_dir: Path, width: int, height: int) -> None:
+    manifest = json.dumps(
+        _build_viewer_manifest(width, height, _collect_viewer_assets(output_dir, width, height)),
+        separators=(",", ":"),
+    )
+    template_path = Path(__file__).with_name("viewer_template.html")
+    html = template_path.read_text(encoding="utf-8")
+    html = html.replace("__VIEWER_MANIFEST__", manifest)
+    html = html.replace("__VIEWER_WIDTH__", str(width))
+    html = html.replace("__VIEWER_HEIGHT__", str(height))
+    html = html.replace("__VIEWER_CANVAS_WIDTH__", str(width * 40))
+    html = html.replace("__VIEWER_CANVAS_HEIGHT__", str(height * 40))
+    (output_dir / "viewer.html").write_text(html, encoding="utf-8")
 
 
 def create_clear_night_png(path: Path, width: int, height: int) -> None:
@@ -112,9 +182,10 @@ def _build_gradient_rows(
             normalized = (raw_t - top_fraction) / max(1e-6, 1.0 - top_fraction)
             t = 1.0 - math.exp(-4.0 * normalized)
 
-        rows.append(tuple(
-            int(cloud_color[c] + (sky_color[c] - cloud_color[c]) * t)
-            for c in range(3)
+        rows.append((
+            int(cloud_color[0] + (sky_color[0] - cloud_color[0]) * t),
+            int(cloud_color[1] + (sky_color[1] - cloud_color[1]) * t),
+            int(cloud_color[2] + (sky_color[2] - cloud_color[2]) * t),
         ))
     return rows
 
@@ -219,7 +290,11 @@ def create_gradient_png(
 
 def _lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     t = max(0.0, min(1.0, t))
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    return (
+        int(a[0] + (b[0] - a[0]) * t),
+        int(a[1] + (b[1] - a[1]) * t),
+        int(a[2] + (b[2] - a[2]) * t),
+    )
 
 
 PhaseGenerator = Callable[[int, int], Tuple[float, float, Optional[float]]]
@@ -335,7 +410,7 @@ def create_fog_animation(path: Path, width: int, height: int, *, is_day: bool) -
 
     cos_field, sin_field, amplitude_max, _ = _build_phase_field(width, height, generator)
 
-    def pixel_fn(_: int, __: int, mix: float, ___: Optional[float]) -> tuple[int, int, int]:
+    def pixel_fn(_x: int, _y: int, mix: float, _extra: Optional[float]) -> tuple[int, int, int]:
         value = base + value_range * (0.5 + 0.5 * mix)
         brightness = max(0, min(255, int(round(value))))
         return (brightness, brightness, brightness)
@@ -403,7 +478,6 @@ def main() -> None:
     fog_day_path = output_dir / "fog-day.png"
     fog_night_path = output_dir / "fog-night.png"
     severe_path = output_dir / "severe.png"
-
     create_png(day_path, args.width, args.height, DAY_COLOR)
     create_clear_night_png(night_path, args.width, args.height)
     create_precipitation_png(
@@ -525,6 +599,7 @@ def main() -> None:
         args.width,
         args.height,
     )
+    write_viewer_html(output_dir, args.width, args.height)
 
     print(f"Generated backgrounds in {output_dir.resolve()}")
 
