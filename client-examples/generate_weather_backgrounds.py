@@ -450,6 +450,11 @@ def parse_args() -> argparse.Namespace:
         default="weather-backgrounds",
         help="Directory to write generated images (created if missing).",
     )
+    parser.add_argument(
+        "--skip-viewer",
+        action="store_true",
+        help="Skip generating viewer.html.",
+    )
     return parser.parse_args()
 
 
@@ -599,7 +604,8 @@ def main() -> None:
         args.width,
         args.height,
     )
-    write_viewer_html(output_dir, args.width, args.height)
+    if not args.skip_viewer:
+        write_viewer_html(output_dir, args.width, args.height)
 
     print(f"Generated backgrounds in {output_dir.resolve()}")
 
