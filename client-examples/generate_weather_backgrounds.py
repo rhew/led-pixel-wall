@@ -46,12 +46,51 @@ FOG_DAY_BASE = 75
 FOG_DAY_RANGE = 150
 FOG_NIGHT_BASE = 5
 FOG_NIGHT_RANGE = 45
+CLEAR_NIGHT_FRAME_COUNT = 150
+CLEAR_NIGHT_FRAME_DURATION_MS = 100
+CLEAR_NIGHT_STAR_COLOR = (235, 235, 255)
+CLEAR_NIGHT_TAIL_INTENSITY = (1.0, 0.55, 0.25)
 
 
 def create_png(path: Path, width: int, height: int, color: tuple[int, int, int]) -> None:
     """Create a solid-color PNG at the given path."""
     image = Image.new("RGB", (width, height), color)
     image.save(path, format="PNG")
+
+
+def create_clear_night_png(path: Path, width: int, height: int) -> None:
+    if width < 1 or height < 1:
+        raise ValueError("Width and height must be positive for clear-night animation.")
+
+    events = [
+        {"start": 18, "x": 3, "y": 1, "dx": 1, "dy": 1, "length": 5},
+        {"start": 74, "x": 0, "y": 3, "dx": 1, "dy": 1, "length": 4},
+    ]
+
+    frames: List[Image.Image] = []
+    for frame_index in range(CLEAR_NIGHT_FRAME_COUNT):
+        frame = Image.new("RGB", (width, height), NIGHT_COLOR)
+        pixels = frame.load()
+        for event in events:
+            progress = frame_index - event["start"]
+            if 0 <= progress < event["length"]:
+                head_x = event["x"] + progress * event["dx"]
+                head_y = event["y"] + progress * event["dy"]
+                for tail_index, intensity in enumerate(CLEAR_NIGHT_TAIL_INTENSITY):
+                    x = head_x - tail_index * event["dx"]
+                    y = head_y - tail_index * event["dy"]
+                    if 0 <= x < width and 0 <= y < height:
+                        pixels[x, y] = tuple(int(channel * intensity) for channel in CLEAR_NIGHT_STAR_COLOR)
+        frames.append(frame)
+
+    first, *rest = frames
+    first.save(
+        path,
+        save_all=True,
+        append_images=rest,
+        loop=0,
+        duration=CLEAR_NIGHT_FRAME_DURATION_MS,
+    )
 
 
 def _build_gradient_rows(
@@ -366,7 +405,7 @@ def main() -> None:
     severe_path = output_dir / "severe.png"
 
     create_png(day_path, args.width, args.height, DAY_COLOR)
-    create_png(night_path, args.width, args.height, NIGHT_COLOR)
+    create_clear_night_png(night_path, args.width, args.height)
     create_precipitation_png(
         rain_day_path,
         args.width,
