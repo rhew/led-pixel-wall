@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import urllib.parse
 import urllib.request
@@ -12,6 +13,7 @@ try:
 except ImportError:
     cloudscraper = None
 
+LOGGER = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 10
 USER_AGENT = "led-pixel-wall-trailstatus/1.0"
 TMTB_MOBILE_STATUS_URL = "https://www.trianglemtb.com/mobiletrailstatus.php"
@@ -63,25 +65,26 @@ def _fetch_text(url: str) -> str:
         return response.read().decode(charset, errors="replace")
 
 
-def _fetch_widget_text(url: str) -> str:
+def _build_scraper():
     if cloudscraper is None:
         raise RuntimeError("cloudscraper is required to fetch Trailforks widget status")
 
-    scraper = cloudscraper.create_scraper(
+    return cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "linux", "desktop": True}
     )
+
+
+def _fetch_widget_text(url: str, scraper=None) -> str:
+    if scraper is None:
+        scraper = _build_scraper()
     response = scraper.get(url, headers={"Referer": TMTB_MOBILE_STATUS_URL}, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     return response.text
 
 
-def _fetch_status_page_text(url: str) -> str:
-    if cloudscraper is None:
-        raise RuntimeError("cloudscraper is required to fetch Trailforks status pages")
-
-    scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "linux", "desktop": True}
-    )
+def _fetch_status_page_text(url: str, scraper=None) -> str:
+    if scraper is None:
+        scraper = _build_scraper()
     response = scraper.get(url, headers={"Referer": TMTB_MOBILE_STATUS_URL}, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     return response.text
@@ -247,29 +250,34 @@ def parse_tmtb_trail_statuses(html: str, base_url: str = TMTB_MOBILE_STATUS_URL)
 def fetch_tmtb_trail_statuses(url: str = TMTB_MOBILE_STATUS_URL) -> list[TrailStatus]:
     trails = parse_tmtb_trail_statuses(_fetch_text(url), base_url=url)
     results: list[TrailStatus] = []
+    scraper = _build_scraper()
 
     for trail in trails:
-        if not trail.trailforks_widget_url:
-            results.append(trail)
-            continue
+        try:
+            if not trail.trailforks_widget_url:
+                results.append(trail)
+                continue
 
-        widget_html = _fetch_widget_text(trail.trailforks_widget_url)
-        status_page_url = _extract_widget_status_url(widget_html)
-        updated_epoch = None
-        if status_page_url:
-            status_page_html = _fetch_status_page_text(status_page_url)
-            updated_epoch = _extract_precise_updated_epoch(status_page_html)
-        results.append(
-            TrailStatus(
-                name=trail.name,
-                status=_extract_widget_status(widget_html),
-                updated=_extract_widget_updated(widget_html),
-                detail_url=trail.detail_url,
-                trailforks_region_id=trail.trailforks_region_id,
-                trailforks_widget_url=trail.trailforks_widget_url,
-                trailforks_status_url=status_page_url,
-                updated_epoch=updated_epoch,
+            widget_html = _fetch_widget_text(trail.trailforks_widget_url, scraper=scraper)
+            status_page_url = _extract_widget_status_url(widget_html)
+            updated_epoch = None
+            if status_page_url:
+                status_page_html = _fetch_status_page_text(status_page_url, scraper=scraper)
+                updated_epoch = _extract_precise_updated_epoch(status_page_html)
+            results.append(
+                TrailStatus(
+                    name=trail.name,
+                    status=_extract_widget_status(widget_html),
+                    updated=_extract_widget_updated(widget_html),
+                    detail_url=trail.detail_url,
+                    trailforks_region_id=trail.trailforks_region_id,
+                    trailforks_widget_url=trail.trailforks_widget_url,
+                    trailforks_status_url=status_page_url,
+                    updated_epoch=updated_epoch,
+                )
             )
-        )
+        except Exception as exc:
+            LOGGER.warning("Trailforks fetch failed for %s: %s", trail.name, exc)
+            results.append(trail)
 
     return results

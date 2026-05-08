@@ -22,6 +22,10 @@ class TrailStatusDisplay:
         self.trails = []
         self.fetch_error = None
 
+    def _log_refresh_error(self, exc: Exception) -> None:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{timestamp} refresh failed: {exc}")
+
     def _format_age(self, updated_epoch: int | None) -> str:
         if updated_epoch is None:
             return "--h --m"
@@ -76,6 +80,7 @@ class TrailStatusDisplay:
                 self._refresh()
             except Exception as exc:
                 self.fetch_error = str(exc)
+                self._log_refresh_error(exc)
             self.last_refresh = elapsed
 
         pixels = [(0, 0, 0)] * (PANEL_WIDTH * PANEL_HEIGHT)
