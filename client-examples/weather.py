@@ -14,28 +14,32 @@ from datetime import datetime
 from typing import Optional
 
 from wallclient import DdpClient, PanelConfig
+from wallclient.config import env_str
 from weatherlib import backgrounds, noaa, sun
 
-CONTROLLER_IP = "192.168.86.28"
-CONTROLLER_PORT = 4048
 RETRY_INTERVAL_SEC = 60.0
-LOCATION_QUERY = "Cary, NC"
 FETCH_INTERVAL_SEC = 300.0
 TEST_MODE_TEMPERATURE = 72
 
 
 def parse_args() -> argparse.Namespace:
+    defaults = PanelConfig()
     parser = argparse.ArgumentParser(description="LED wall weather display")
     parser.add_argument(
         "--controller-ip",
-        default=CONTROLLER_IP,
-        help=f"Controller IP address (default: {CONTROLLER_IP})",
+        default=defaults.controller_ip,
+        help="Controller IP address (default: LED_WALL_CONTROLLER_IP).",
     )
     parser.add_argument(
         "--controller-port",
         type=int,
-        default=CONTROLLER_PORT,
-        help=f"Controller UDP port (default: {CONTROLLER_PORT})",
+        default=defaults.controller_port,
+        help=f"Controller UDP port (default: {defaults.controller_port}).",
+    )
+    parser.add_argument(
+        "--location",
+        default=env_str("LED_WALL_WEATHER_LOCATION"),
+        help="Weather location query (default: LED_WALL_WEATHER_LOCATION).",
     )
     parser.add_argument(
         "--test-backgrounds",
@@ -73,6 +77,9 @@ def run_background_test(args: argparse.Namespace) -> None:
 
 
 def run_weather_display(args: argparse.Namespace) -> None:
+    if not args.location:
+        raise SystemExit("Set LED_WALL_WEATHER_LOCATION or pass --location.")
+
     controller_ip = args.controller_ip
     controller_port = args.controller_port
     client = DdpClient(PanelConfig(controller_ip=controller_ip, controller_port=controller_port))
@@ -84,10 +91,10 @@ def run_weather_display(args: argparse.Namespace) -> None:
     fetch_failed = False
 
     try:
-        lat, lon = noaa.geocode_location(LOCATION_QUERY)
-        print(f"Geocoded '{LOCATION_QUERY}' -> lat={lat:.4f}, lon={lon:.4f}")
+        lat, lon = noaa.geocode_location(args.location)
+        print(f"Geocoded '{args.location}' -> lat={lat:.4f}, lon={lon:.4f}")
     except Exception as exc:
-        raise SystemExit(f"Failed to geocode '{LOCATION_QUERY}': {exc}")
+        raise SystemExit(f"Failed to geocode '{args.location}': {exc}")
 
     properties = noaa.fetch_point_properties(lat, lon)
     stations_url = properties.get("observationStations")

@@ -31,6 +31,11 @@ def build_ddp_packet(sequence: int, payload: bytes) -> bytes:
 
 class DdpClient:
     def __init__(self, config: PanelConfig) -> None:
+        if not config.controller_ip:
+            raise ValueError(
+                "Controller IP is not configured. Set LED_WALL_CONTROLLER_IP "
+                "in the environment, client-examples/.env, or pass it on the command line."
+            )
         self.config = config
         self.sequence = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

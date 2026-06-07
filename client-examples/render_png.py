@@ -18,8 +18,6 @@ from typing import Iterable, List, Sequence, Tuple
 from PIL import Image
 from wallclient import DdpClient, PanelConfig, pixels_to_bytes, serpentine_index
 
-CONTROLLER_IP = "192.168.86.28"
-CONTROLLER_PORT = 4048
 DISPLAY_SECONDS = 5.0
 IMAGE_MODE = "RGB"
 MIN_FRAME_DURATION = 0.05  # seconds
@@ -105,12 +103,13 @@ def iter_png_paths(target: Path) -> Iterable[Path]:
 
 
 def parse_args() -> argparse.Namespace:
+    defaults = PanelConfig()
     parser = argparse.ArgumentParser(description="Render PNGs to the LED panel via DDP.")
     parser.add_argument("path", help="PNG file or directory of PNG files.")
-    parser.add_argument("--width", type=int, default=10, help="Panel width in pixels (default: 10).")
-    parser.add_argument("--height", type=int, default=10, help="Panel height in pixels (default: 5).")
-    parser.add_argument("--ip", default=CONTROLLER_IP, help="Controller IP address.")
-    parser.add_argument("--port", type=int, default=CONTROLLER_PORT, help="Controller DDP port.")
+    parser.add_argument("--width", type=int, default=defaults.width, help=f"Panel width in pixels (default: {defaults.width}).")
+    parser.add_argument("--height", type=int, default=defaults.height, help=f"Panel height in pixels (default: {defaults.height}).")
+    parser.add_argument("--ip", default=defaults.controller_ip, help="Controller IP address (default: LED_WALL_CONTROLLER_IP).")
+    parser.add_argument("--port", type=int, default=defaults.controller_port, help=f"Controller DDP port (default: {defaults.controller_port}).")
     parser.add_argument("--seconds", type=float, default=DISPLAY_SECONDS, help="Display duration per image.")
     parser.add_argument(
         "--repeat",

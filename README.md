@@ -68,14 +68,27 @@ The root `Dockerfile` packages the NOAA weather client in `client-examples/weath
    ```
    docker build -t led-wall-weather .
    ```
-2. Run it with access to your LAN (the container needs to send UDP packets to the DDP server). Replace the IP/port with your ESP-32 board values:
+2. Run it with access to your LAN (the container needs to send UDP packets to the DDP server). Provide local controller and weather settings through environment variables:
    ```
-   docker run --rm --network host led-wall-weather --controller-ip 192.168.86.32 --controller-port 4048
+   docker run --rm --network host \
+     -e LED_WALL_CONTROLLER_IP=<controller-ip> \
+     -e LED_WALL_WEATHER_LOCATION="<city, state>" \
+     led-wall-weather
    ```
 3. Add `--test-backgrounds` to cycle every animation:
    ```
-   docker run --rm --network host led-wall-weather --test-backgrounds
+   docker run --rm --network host -e LED_WALL_CONTROLLER_IP=<controller-ip> led-wall-weather --test-backgrounds
    ```
+
+## Client configuration
+
+The Python clients read local runtime settings from environment variables or `client-examples/.env`. Start from the checked-in template:
+
+```
+cp client-examples/.env.example client-examples/.env
+```
+
+Set at least `LED_WALL_CONTROLLER_IP`. `client-examples/.env` is ignored by git.
 
 ---
 
