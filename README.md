@@ -50,6 +50,14 @@ Once:
     # or all together:
     idf.py -p /dev/ttyACM0 build flash monitor
 
+### Reset saved Wi-Fi over USB
+
+Connect the controller over USB and erase the `nvs` partition:
+
+    python3 $IDF_PATH/components/partition_table/parttool.py --port /dev/ttyACM0 --partition-table-file build/partition_table/partition-table.bin erase_partition --partition-name nvs
+
+This clears saved Wi-Fi credentials and controller config while leaving the firmware installed. Reboot the controller; it should start the `LED-Wall-Setup` provisioning network.
+
 ---
 
 ## Weather client (Docker)

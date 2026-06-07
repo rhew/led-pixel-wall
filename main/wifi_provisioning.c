@@ -37,6 +37,10 @@ typedef struct {
     bool force_24g;
     char ssid[33];
     char pass[65];
+    bool has_pending_creds;
+    bool pending_force_24g;
+    char pending_ssid[33];
+    char pending_pass[65];
     bool attempting_sta;
     bool sta_connected;
     esp_timer_handle_t error_timer;
@@ -86,6 +90,8 @@ static esp_err_t start_station(void);
 static void stop_http_server(void);
 static esp_err_t start_http_server(void);
 static void begin_error_feedback(void);
+static void discard_pending_credentials(void);
+static void stage_pending_credentials(const char *ssid, const char *pass, bool force24);
 static void error_timer_callback(void *arg);
 static void connect_timeout_callback(void *arg);
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *data);
@@ -100,7 +106,6 @@ static esp_err_t handle_submit_post(httpd_req_t *req);
 static esp_err_t handle_submit_get(httpd_req_t *req);
 static esp_err_t handle_alias_get(httpd_req_t *req);
 static void set_portal_message(const char *message);
-static void wifi_clear_credentials(void);
 
 static void url_decode(char *s) {
     char *src = s;
@@ -144,8 +149,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_i
         s_state.sta_connected = false;
         if (s_state.attempting_sta) {
             s_state.attempting_sta = false;
-            set_portal_message("Connection failed. Check your SSID or password and try again.");
-            wifi_clear_credentials();
+            if (s_state.has_pending_creds) {
+                discard_pending_credentials();
+                set_portal_message(s_state.has_creds
+                                       ? "Submitted credentials did not connect. Saved credentials were kept."
+                                       : "Submitted credentials did not connect. Check your SSID or password and try again.");
+            } else {
+                set_portal_message("Connection failed. Saved credentials were kept; submit new details to replace them.");
+            }
             begin_error_feedback();
             start_softap(false);
         } else if (s_state.has_creds) {
@@ -165,6 +176,17 @@ static void ip_event_handler(void *arg, esp_event_base_t base, int32_t event_id,
         ESP_LOGI(TAG, "Got IP");
         s_state.attempting_sta = false;
         s_state.sta_connected = true;
+        if (s_state.has_pending_creds) {
+            esp_err_t err = wifi_save_credentials(s_state.pending_ssid,
+                                                  s_state.pending_pass,
+                                                  s_state.pending_force_24g);
+            if (err == ESP_OK) {
+                discard_pending_credentials();
+            } else {
+                ESP_LOGE(TAG, "Failed to save validated credentials: %s", esp_err_to_name(err));
+                discard_pending_credentials();
+            }
+        }
         stop_http_server();
         notify_status(WIFI_PROVISIONING_STATUS_CONNECTED, NULL);
         if (s_state.connect_timer) {
@@ -295,12 +317,18 @@ static bool lock_to_24g_bssid(const char *ssid, uint8_t out_bssid[6], uint8_t *o
 }
 
 static esp_err_t start_station(void) {
-    ESP_LOGI(TAG, "Starting STA for SSID '%s'", s_state.ssid);
-    ESP_LOGI(TAG, "Force 2.4 GHz lock %s", s_state.force_24g ? "requested" : "not requested");
+    const char *ssid = s_state.has_pending_creds ? s_state.pending_ssid : s_state.ssid;
+    const char *pass = s_state.has_pending_creds ? s_state.pending_pass : s_state.pass;
+    bool force_24g = s_state.has_pending_creds ? s_state.pending_force_24g : s_state.force_24g;
+
+    ESP_LOGI(TAG, "Starting STA for SSID '%s'%s",
+             ssid,
+             s_state.has_pending_creds ? " (pending)" : "");
+    ESP_LOGI(TAG, "Force 2.4 GHz lock %s", force_24g ? "requested" : "not requested");
     s_state.attempting_sta = true;
 
     char msg[128];
-    snprintf(msg, sizeof(msg), "Connecting to '%s'...", s_state.ssid);
+    snprintf(msg, sizeof(msg), "Connecting to '%s'...", ssid);
     set_portal_message(msg);
     ESP_LOGI(TAG, "%s", msg);
     const char *status_msg = s_state.portal_message_valid ? s_state.portal_message : msg;
@@ -312,18 +340,18 @@ static esp_err_t start_station(void) {
     ESP_LOGI(TAG, "Wi-Fi stopped; configuring station");
 
     wifi_config_t sta_cfg = {0};
-    strncpy((char *)sta_cfg.sta.ssid, s_state.ssid, sizeof(sta_cfg.sta.ssid));
-    strncpy((char *)sta_cfg.sta.password, s_state.pass, sizeof(sta_cfg.sta.password));
+    strncpy((char *)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid));
+    strncpy((char *)sta_cfg.sta.password, pass, sizeof(sta_cfg.sta.password));
     sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     sta_cfg.sta.pmf_cfg.capable = true;
     sta_cfg.sta.pmf_cfg.required = false;
     sta_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     sta_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
-    if (s_state.force_24g) {
+    if (force_24g) {
         uint8_t bssid[6];
         uint8_t channel = 0;
-        if (lock_to_24g_bssid(s_state.ssid, bssid, &channel)) {
+        if (lock_to_24g_bssid(ssid, bssid, &channel)) {
             memcpy(sta_cfg.sta.bssid, bssid, sizeof(bssid));
             sta_cfg.sta.bssid_set = true;
             sta_cfg.sta.channel = channel;
@@ -361,8 +389,14 @@ static void connect_timeout_callback(void *arg) {
     }
     ESP_LOGW(TAG, "Connection attempt timed out");
     s_state.attempting_sta = false;
-    set_portal_message("Connection timed out. Check your network details and try again.");
-    wifi_clear_credentials();
+    if (s_state.has_pending_creds) {
+        discard_pending_credentials();
+        set_portal_message(s_state.has_creds
+                               ? "Submitted credentials timed out. Saved credentials were kept."
+                               : "Submitted credentials timed out. Check your network details and try again.");
+    } else {
+        set_portal_message("Connection timed out. Saved credentials were kept; submit new details to replace them.");
+    }
     begin_error_feedback();
     start_softap(false);
 }
@@ -377,6 +411,25 @@ static void begin_error_feedback(void) {
         esp_timer_stop(s_state.connect_timer);
     }
     notify_status(WIFI_PROVISIONING_STATUS_ERROR, msg);
+}
+
+static void discard_pending_credentials(void) {
+    memset(s_state.pending_ssid, 0, sizeof(s_state.pending_ssid));
+    memset(s_state.pending_pass, 0, sizeof(s_state.pending_pass));
+    s_state.pending_force_24g = false;
+    s_state.has_pending_creds = false;
+}
+
+static void stage_pending_credentials(const char *ssid, const char *pass, bool force24) {
+    discard_pending_credentials();
+    strncpy(s_state.pending_ssid, ssid, sizeof(s_state.pending_ssid) - 1);
+    strncpy(s_state.pending_pass, pass, sizeof(s_state.pending_pass) - 1);
+    s_state.pending_force_24g = force24;
+    s_state.has_pending_creds = true;
+    ESP_LOGI(TAG,
+             "Staged credentials for SSID '%s' (force24=%s)",
+             s_state.pending_ssid,
+             s_state.pending_force_24g ? "yes" : "no");
 }
 
 static esp_err_t send_portal_page(httpd_req_t *req, const char *message) {
@@ -515,11 +568,7 @@ static esp_err_t handle_submit_post(httpd_req_t *req) {
     }
     s_controller_cfg = new_cfg;
 
-    esp_err_t err = wifi_save_credentials(ssid, pass, force24);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save credentials: %s", esp_err_to_name(err));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to store credentials");
-    }
+    stage_pending_credentials(ssid, pass, force24);
 
     char page[768];
     snprintf(page, sizeof(page),
@@ -543,6 +592,7 @@ static esp_err_t handle_submit_post(httpd_req_t *req) {
                                         portMAX_DELAY);
     if (post_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to schedule STA start: %s", esp_err_to_name(post_err));
+        discard_pending_credentials();
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start connection");
     }
     ESP_LOGI(TAG, "STA start scheduled");
@@ -700,22 +750,6 @@ static void set_portal_message(const char *message) {
         s_state.portal_message_valid = false;
         ESP_LOGI(TAG, "Portal message cleared");
     }
-}
-
-static void wifi_clear_credentials(void) {
-    nvs_handle_t nvs;
-    if (nvs_open(WIFI_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        nvs_erase_key(nvs, WIFI_KEY_SSID);
-        nvs_erase_key(nvs, WIFI_KEY_PASS);
-        nvs_erase_key(nvs, WIFI_KEY_FORCE);
-        nvs_commit(nvs);
-        nvs_close(nvs);
-    }
-    memset(s_state.ssid, 0, sizeof(s_state.ssid));
-    memset(s_state.pass, 0, sizeof(s_state.pass));
-    s_state.force_24g = false;
-    s_state.has_creds = false;
-    ESP_LOGI(TAG, "Cleared stored Wi-Fi credentials");
 }
 
 static void internal_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *data) {
